@@ -4,6 +4,8 @@ import {
 } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
 import { randomUUID } from 'node:crypto';
+import { unlink } from 'node:fs/promises';
+import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppModule } from '../src/app.module.js';
 import { setupApp } from '../src/app.setup.js';
@@ -368,5 +370,136 @@ describe('выход и сессии', () => {
 
     expect(response.statusCode).toBe(404);
     expect((await getMe(owner.accessToken)).statusCode).toBe(200);
+  });
+});
+
+const PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64',
+);
+const GIF = Buffer.from(
+  'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
+  'base64',
+);
+
+function avatarForm(content: Buffer, filename: string, mime: string) {
+  const boundary = '----vks-avatar';
+  const payload = Buffer.concat([
+    Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="avatar"; filename="${filename}"\r\nContent-Type: ${mime}\r\n\r\n`,
+    ),
+    content,
+    Buffer.from(`\r\n--${boundary}--\r\n`),
+  ]);
+
+  return {
+    payload,
+    headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+  };
+}
+
+function storedAvatarPath(avatarUrl: string): string {
+  return path.join(process.cwd(), 'uploads', 'avatars', path.basename(avatarUrl));
+}
+
+describe('профиль', () => {
+  it('меняет имя и загружает аватар файлом', async () => {
+    const session = toSession(await register());
+    const auth = { authorization: `Bearer ${session.accessToken}` };
+    const created: string[] = [];
+
+    try {
+      const nameResponse = await app.inject({
+        method: 'PATCH',
+        url: `/${prefix}/users/me`,
+        headers: auth,
+        payload: { name: '  Икам  ' },
+      });
+
+      expect(nameResponse.statusCode).toBe(200);
+      expect(nameResponse.json()).toMatchObject({
+        id: session.userId,
+        name: 'Икам',
+        avatarUrl: null,
+      });
+
+      const png = avatarForm(PNG, 'avatar.png', 'image/png');
+      const avatarResponse = await app.inject({
+        method: 'PATCH',
+        url: `/${prefix}/users/me/avatar`,
+        headers: { ...auth, ...png.headers },
+        payload: png.payload,
+      });
+
+      expect(avatarResponse.statusCode).toBe(200);
+      const avatarUrl = avatarResponse.json().avatarUrl as string;
+      created.push(avatarUrl);
+      expect(avatarUrl).toMatch(/^\/uploads\/avatars\/\d+-.+\.png$/);
+      expect(avatarResponse.json().name).toBe('Икам');
+
+      const file = await app.inject({ method: 'GET', url: avatarUrl });
+      expect(file.statusCode).toBe(200);
+      expect(file.headers['content-type']).toContain('image/png');
+      expect(file.rawPayload).toEqual(PNG);
+
+      const gif = avatarForm(GIF, 'avatar.gif', 'image/gif');
+      const replaced = await app.inject({
+        method: 'PATCH',
+        url: `/${prefix}/users/me/avatar`,
+        headers: { ...auth, ...gif.headers },
+        payload: gif.payload,
+      });
+
+      expect(replaced.statusCode).toBe(200);
+      const nextUrl = replaced.json().avatarUrl as string;
+      created.push(nextUrl);
+      expect(nextUrl).toMatch(/\.gif$/);
+      expect((await app.inject({ method: 'GET', url: avatarUrl })).statusCode).toBe(
+        404,
+      );
+      expect((await getMe(session.accessToken)).json().avatarUrl).toBe(nextUrl);
+    } finally {
+      await Promise.all(
+        created.map((avatarUrl) =>
+          unlink(storedAvatarPath(avatarUrl)).catch(() => undefined),
+        ),
+      );
+    }
+  });
+
+  it('отклоняет пустое имя, чужие поля и файл, который не является изображением', async () => {
+    const session = toSession(await register());
+    const auth = { authorization: `Bearer ${session.accessToken}` };
+
+    const emptyBody = await app.inject({
+      method: 'PATCH',
+      url: `/${prefix}/users/me`,
+      headers: auth,
+      payload: {},
+    });
+    const emptyName = await app.inject({
+      method: 'PATCH',
+      url: `/${prefix}/users/me`,
+      headers: auth,
+      payload: { name: '   ' },
+    });
+    const extraField = await app.inject({
+      method: 'PATCH',
+      url: `/${prefix}/users/me`,
+      headers: auth,
+      payload: { name: 'Икам', role: 'ADMIN' },
+    });
+    const text = avatarForm(Buffer.from('not an image'), 'note.txt', 'text/plain');
+    const badAvatar = await app.inject({
+      method: 'PATCH',
+      url: `/${prefix}/users/me/avatar`,
+      headers: { ...auth, ...text.headers },
+      payload: text.payload,
+    });
+
+    expect(emptyBody.statusCode).toBe(400);
+    expect(emptyName.statusCode).toBe(400);
+    expect(extraField.statusCode).toBe(400);
+    expect(badAvatar.statusCode).toBe(400);
   });
 });
