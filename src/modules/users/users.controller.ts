@@ -27,7 +27,9 @@ export class UsersController {
   @Get('me')
   @ApiOperation({ summary: 'Профиль текущего пользователя' })
   @ApiOkResponse({ type: UserDto })
-  @ApiUnauthorizedResponse({ description: 'Нет или недействителен access token' })
+  @ApiUnauthorizedResponse({
+    description: 'Нет или недействителен access token',
+  })
   async getMe(@CurrentUser() user: AuthUser): Promise<UserDto> {
     return UserDto.fromEntity(await this.usersService.getById(user.id));
   }
@@ -36,7 +38,9 @@ export class UsersController {
   @ApiOperation({ summary: 'Изменить профиль текущего пользователя' })
   @ApiOkResponse({ type: UserDto })
   @ApiBadRequestResponse({ description: 'Некорректные поля профиля' })
-  @ApiUnauthorizedResponse({ description: 'Нет или недействителен access token' })
+  @ApiUnauthorizedResponse({
+    description: 'Нет или недействителен access token',
+  })
   async update(
     @CurrentUser() user: AuthUser,
     @Body() dto: UpdateUserDto,
@@ -61,9 +65,13 @@ export class UsersController {
     },
   })
   @ApiOkResponse({ type: UserDto })
-  @ApiBadRequestResponse({ description: 'Файл не передан или это не изображение' })
+  @ApiBadRequestResponse({
+    description: 'Файл не передан или это не изображение',
+  })
   @ApiPayloadTooLargeResponse({ description: 'Файл аватара больше 2 МБ' })
-  @ApiUnauthorizedResponse({ description: 'Нет или недействителен access token' })
+  @ApiUnauthorizedResponse({
+    description: 'Нет или недействителен access token',
+  })
   async updateAvatar(
     @CurrentUser() user: AuthUser,
     @Req() request: FastifyRequest,

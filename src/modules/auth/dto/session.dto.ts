@@ -23,7 +23,10 @@ export class SessionDto {
   @ApiProperty({ description: 'Сессия текущего access token' })
   isCurrent: boolean;
 
-  static fromEntity(session: AuthSession, currentSessionId: string): SessionDto {
+  static fromEntity(
+    session: AuthSession,
+    currentSessionId: string,
+  ): SessionDto {
     return {
       id: session.id,
       ipAddress: session.ipAddress,

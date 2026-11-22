@@ -13,12 +13,17 @@
     "start:dev": "nest start --watch",
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main.js",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"prisma/**/*.prisma\"",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
     "prisma:seed": "prisma db seed",
+    "prisma:studio": "prisma studio",
     "test:e2e": "vitest run",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose down",
+    "db:logs": "docker compose logs -f postgres"
   },
   "dependencies": {
     "@fastify/cookie": "11.1.5",
@@ -38,6 +43,7 @@
     "class-validator": "0.15.1",
     "fastify": "5.12.8",
     "pg": "8.23.1",
+    "prettier": "^3.10.1",
     "reflect-metadata": "0.2.2",
     "rxjs": "7.8.2",
     "tslib": "2.9.1"

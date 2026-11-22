@@ -2,7 +2,12 @@ import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { isUUID } from 'class-validator';
-import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import {
+  createHash,
+  createHmac,
+  randomBytes,
+  timingSafeEqual,
+} from 'node:crypto';
 import type { AccessTokenPayload } from './auth.types.js';
 
 const REFRESH_SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/;

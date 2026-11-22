@@ -184,7 +184,9 @@ export class AuthController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Выход со всех устройств' })
   @ApiNoContentResponse({ description: 'Все сессии пользователя отозваны' })
-  @ApiUnauthorizedResponse({ description: 'Нет или недействителен access token' })
+  @ApiUnauthorizedResponse({
+    description: 'Нет или недействителен access token',
+  })
   async logoutAll(
     @CurrentUser() user: AuthUser,
     @Res({ passthrough: true }) reply: FastifyReply,
@@ -197,7 +199,9 @@ export class AuthController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Активные сессии текущего пользователя' })
   @ApiOkResponse({ type: SessionDto, isArray: true })
-  @ApiUnauthorizedResponse({ description: 'Нет или недействителен access token' })
+  @ApiUnauthorizedResponse({
+    description: 'Нет или недействителен access token',
+  })
   async listSessions(@CurrentUser() user: AuthUser): Promise<SessionDto[]> {
     const sessions = await this.sessionsService.listActive(user.id);
 
@@ -213,7 +217,9 @@ export class AuthController {
   @ApiParam({ name: 'id', format: 'uuid', description: 'id сессии' })
   @ApiNoContentResponse({ description: 'Сессия отозвана' })
   @ApiNotFoundResponse({ description: 'Активная сессия не найдена' })
-  @ApiUnauthorizedResponse({ description: 'Нет или недействителен access token' })
+  @ApiUnauthorizedResponse({
+    description: 'Нет или недействителен access token',
+  })
   async revokeSession(
     @CurrentUser() user: AuthUser,
     @Param('id', new ParseUUIDPipe()) id: string,
@@ -226,13 +232,20 @@ export class AuthController {
     }
   }
 
-  private sendTokens(reply: FastifyReply, tokens: IssuedTokens): AuthResponseDto {
+  private sendTokens(
+    reply: FastifyReply,
+    tokens: IssuedTokens,
+  ): AuthResponseDto {
     reply.setCookie(
       REFRESH_TOKEN_COOKIE,
       tokens.refreshToken,
       this.refreshCookieOptions,
     );
-    reply.setCookie(CSRF_TOKEN_COOKIE, tokens.csrfToken, this.csrfCookieOptions);
+    reply.setCookie(
+      CSRF_TOKEN_COOKIE,
+      tokens.csrfToken,
+      this.csrfCookieOptions,
+    );
     reply.header('Cache-Control', 'no-store');
 
     return {

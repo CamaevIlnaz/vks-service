@@ -87,7 +87,11 @@ export class AuthService implements OnModuleInit {
   async refresh(refreshToken: string, meta: ClientMeta): Promise<IssuedTokens> {
     const rotated = await this.sessionsService.rotate(refreshToken, meta);
 
-    return this.issueTokens(rotated.user, rotated.sessionId, rotated.refreshToken);
+    return this.issueTokens(
+      rotated.user,
+      rotated.sessionId,
+      rotated.refreshToken,
+    );
   }
 
   logout(refreshToken: string): Promise<void> {
@@ -98,7 +102,10 @@ export class AuthService implements OnModuleInit {
     return this.sessionsService.revokeAll(userId);
   }
 
-  private async startSession(user: User, meta: ClientMeta): Promise<IssuedTokens> {
+  private async startSession(
+    user: User,
+    meta: ClientMeta,
+  ): Promise<IssuedTokens> {
     const { sessionId, refreshToken } = await this.sessionsService.create(
       user.id,
       meta,

@@ -16,7 +16,11 @@ export class RegisterDto {
   @MaxLength(254)
   email: string;
 
-  @ApiProperty({ example: 'correct-horse-battery', minLength: 8, maxLength: 128 })
+  @ApiProperty({
+    example: 'correct-horse-battery',
+    minLength: 8,
+    maxLength: 128,
+  })
   @IsString()
   @MinLength(8)
   @MaxLength(128)

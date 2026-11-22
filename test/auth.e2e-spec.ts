@@ -399,7 +399,12 @@ function avatarForm(content: Buffer, filename: string, mime: string) {
 }
 
 function storedAvatarPath(avatarUrl: string): string {
-  return path.join(process.cwd(), 'uploads', 'avatars', path.basename(avatarUrl));
+  return path.join(
+    process.cwd(),
+    'uploads',
+    'avatars',
+    path.basename(avatarUrl),
+  );
 }
 
 describe('профиль', () => {
@@ -454,9 +459,9 @@ describe('профиль', () => {
       const nextUrl = replaced.json().avatarUrl as string;
       created.push(nextUrl);
       expect(nextUrl).toMatch(/\.gif$/);
-      expect((await app.inject({ method: 'GET', url: avatarUrl })).statusCode).toBe(
-        404,
-      );
+      expect(
+        (await app.inject({ method: 'GET', url: avatarUrl })).statusCode,
+      ).toBe(404);
       expect((await getMe(session.accessToken)).json().avatarUrl).toBe(nextUrl);
     } finally {
       await Promise.all(
@@ -489,7 +494,11 @@ describe('профиль', () => {
       headers: auth,
       payload: { name: 'Икам', role: 'ADMIN' },
     });
-    const text = avatarForm(Buffer.from('not an image'), 'note.txt', 'text/plain');
+    const text = avatarForm(
+      Buffer.from('not an image'),
+      'note.txt',
+      'text/plain',
+    );
     const badAvatar = await app.inject({
       method: 'PATCH',
       url: `/${prefix}/users/me/avatar`,
