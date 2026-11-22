@@ -6,3 +6,4 @@ export const CSRF_TOKEN_COOKIE = 'csrf_token';
 export const CSRF_HEADER = 'x-csrf-token';
 
 export const IS_PUBLIC_KEY = 'isPublic';
+export const IS_OPTIONAL_AUTH_KEY = 'isOptionalAuth';

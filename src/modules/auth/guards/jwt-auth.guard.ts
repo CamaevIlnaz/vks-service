@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { UserStatus } from '../../../generated/prisma/client.js';
-import { IS_PUBLIC_KEY } from '../auth.constants.js';
+import { IS_OPTIONAL_AUTH_KEY, IS_PUBLIC_KEY } from '../auth.constants.js';
 import type { AuthenticatedRequest } from '../auth.types.js';
 import { SessionsService } from '../sessions.service.js';
 import { TokensService } from '../tokens.service.js';
@@ -21,16 +21,26 @@ export class JwtAuthGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
-      context.getHandler(),
-      context.getClass(),
-    ]);
+    const targets = [context.getHandler(), context.getClass()];
+    const isPublic = this.reflector.getAllAndOverride<boolean>(
+      IS_PUBLIC_KEY,
+      targets,
+    );
 
     if (isPublic) {
       return true;
     }
 
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
+    const isOptional = this.reflector.getAllAndOverride<boolean>(
+      IS_OPTIONAL_AUTH_KEY,
+      targets,
+    );
+
+    if (isOptional && !request.headers.authorization) {
+      return true;
+    }
+
     const [type, token] = request.headers.authorization?.split(' ') ?? [];
 
     if (type !== 'Bearer' || !token) {

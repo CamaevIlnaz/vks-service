@@ -21,10 +21,13 @@ function requiredSecret(name: string): string {
 export const authConfig = registerAs('auth', () => {
   const jwtAccessSecret = requiredSecret('JWT_ACCESS_SECRET');
   const csrfSecret = requiredSecret('CSRF_SECRET');
+  const guestTokenSecret = requiredSecret('GUEST_TOKEN_SECRET');
 
-  if (jwtAccessSecret === csrfSecret) {
-    throw new Error('JWT_ACCESS_SECRET и CSRF_SECRET не должны совпадать');
+  if (new Set([jwtAccessSecret, csrfSecret, guestTokenSecret]).size !== 3) {
+    throw new Error(
+      'JWT_ACCESS_SECRET, CSRF_SECRET и GUEST_TOKEN_SECRET не должны совпадать',
+    );
   }
 
-  return { jwtAccessSecret, csrfSecret };
+  return { jwtAccessSecret, csrfSecret, guestTokenSecret };
 });

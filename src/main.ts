@@ -11,6 +11,7 @@ import {
   CSRF_HEADER,
   REFRESH_TOKEN_COOKIE,
 } from './modules/auth/auth.constants.js';
+import { GUEST_TOKEN_HEADER } from './modules/conferences/guest-tokens.service.js';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestFastifyApplication>(
@@ -31,6 +32,10 @@ async function bootstrap(): Promise<void> {
     .addBearerAuth()
     .addCookieAuth(REFRESH_TOKEN_COOKIE)
     .addApiKey({ type: 'apiKey', in: 'header', name: CSRF_HEADER }, 'csrf')
+    .addApiKey(
+      { type: 'apiKey', in: 'header', name: GUEST_TOKEN_HEADER },
+      'guest',
+    )
     .build();
 
   SwaggerModule.setup(
