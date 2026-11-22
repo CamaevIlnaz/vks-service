@@ -40,7 +40,7 @@ function readAuth() {
 
 function readCall() {
   const call = readJson(sessionStorage, CALL_KEY);
-  if (!call?.conferenceId || !call.sessionId || !call.room?.slug) {
+  if (!call?.room?.slug) {
     sessionStorage.removeItem(CALL_KEY);
     return null;
   }
@@ -201,7 +201,7 @@ function Topbar({ title, user, children }) {
   </header>`;
 }
 
-function AuthScreen({ notice, onSuccess, slug, onGuestJoin }) {
+function AuthScreen({ notice, onSuccess, slug, onGuestJoin, onJoinByLink }) {
   const [mode, setMode] = useState(slug ? 'guest' : 'login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -211,7 +211,6 @@ function AuthScreen({ notice, onSuccess, slug, onGuestJoin }) {
   const [guestName, setGuestName] = useState('');
   const [guestSlug, setGuestSlug] = useState(slug || '');
   const [guestError, setGuestError] = useState('');
-  const [guestPending, setGuestPending] = useState(false);
   const [room, setRoom] = useState(null);
   const [previewError, setPreviewError] = useState('');
 
@@ -283,33 +282,20 @@ function AuthScreen({ notice, onSuccess, slug, onGuestJoin }) {
       return;
     }
 
-    setGuestPending(true);
     setGuestError('');
-    try {
-      const data = await request(
-        `/rooms/by-slug/${encodeURIComponent(normalized)}/join`,
-        {
-          method: 'POST',
-          guestToken: readGuestToken(normalized) || undefined,
-          body: { guestName: displayName },
-        },
-      );
-      if (data.guestToken) writeGuestToken(normalized, data.guestToken);
-      onGuestJoin({
-        conferenceId: data.conferenceId,
-        conferenceStatus: data.conferenceStatus,
-        sessionId: data.sessionId,
-        participantId: data.participantId,
-        role: data.role,
-        room: data.room,
-        guestToken: data.guestToken,
-        guestName: displayName,
-      });
-    } catch (joinError) {
-      setGuestError(joinError.message);
-    } finally {
-      setGuestPending(false);
-    }
+    onGuestJoin({
+      room: room
+        ? {
+            slug: room.slug,
+            name: room.name,
+            type: room.type,
+            accessType: room.accessType,
+            status: room.status,
+          }
+        : { slug: normalized, name: normalized },
+      guestName: displayName,
+      guestToken: readGuestToken(normalized) || null,
+    });
   }
 
   function switchMode(next) {
@@ -326,7 +312,7 @@ function AuthScreen({ notice, onSuccess, slug, onGuestJoin }) {
     <p className="muted">
       ${mode === 'guest'
         ? 'Подключение к комнате без аккаунта.'
-        : 'Вход, комнаты и звонок через REST.'}
+        : 'Вход и комнаты. Звонок идёт по WebSocket.'}
     </p>
     <div className="tabs">
       <button
@@ -387,9 +373,7 @@ function AuthScreen({ notice, onSuccess, slug, onGuestJoin }) {
           <p className="muted">Имя увидят другие участники.</p>
           <${ErrorText}>${previewError}</${ErrorText}>
           <${ErrorText}>${guestError}</${ErrorText}>
-          <button type="submit" disabled=${guestPending || guestBlocked}>
-            ${guestPending ? 'Подключение…' : 'Подключиться'}
-          </button>
+          <button type="submit" disabled=${guestBlocked}>Подключиться</button>
         </form>`
       : html`<form className="card" onSubmit=${submit}>
           ${mode === 'register'
@@ -442,10 +426,95 @@ function AuthScreen({ notice, onSuccess, slug, onGuestJoin }) {
                 : 'Зарегистрироваться'}
           </button>
         </form>`}
+    <p className="muted join-note">
+      <button type="button" className="text" onClick=${onJoinByLink}>
+        Подключиться по ссылке
+      </button>
+    </p>
   </main>`;
 }
 
-function RoomsScreen({ auth, onOpen, onLogout, onUnauthorized }) {
+function JoinScreen({ auth, onJoin, onBack, onUnauthorized }) {
+  const client = useClient(auth, onUnauthorized);
+  const [slug, setSlug] = useState('');
+  const [error, setError] = useState('');
+  const [pending, setPending] = useState(false);
+
+  async function submit(event) {
+    event.preventDefault();
+    const normalized = slug.trim();
+    const slugError = optionalSlugError(normalized);
+    if (!normalized || slugError) {
+      setError(slugError || 'Укажите ссылку комнаты');
+      return;
+    }
+
+    setPending(true);
+    setError('');
+    try {
+      const room = await client(
+        `/rooms/by-slug/${encodeURIComponent(normalized)}`,
+      );
+      if (!room.canJoin) {
+        setError('Подключиться к этой комнате нельзя');
+        return;
+      }
+      onJoin({
+        room: {
+          slug: room.slug,
+          name: room.name,
+          type: room.type,
+          accessType: room.accessType,
+          status: room.status,
+        },
+        guestName: auth ? null : 'Гость',
+        guestToken: auth ? null : readGuestToken(room.slug) || null,
+      });
+    } catch (joinError) {
+      if (joinError.status !== 401) setError(joinError.message);
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return html`<main className="narrow">
+    <p className="brand">VKS</p>
+    <h1>Подключение по ссылке</h1>
+    <p className="muted">Введите ссылку комнаты.</p>
+    <form className="card" onSubmit=${submit}>
+      <label className="field">
+        <span>Ссылка комнаты</span>
+        <input
+          required
+          autoFocus
+          minLength="3"
+          maxLength="64"
+          pattern="[a-z0-9]+(?:-[a-z0-9]+)*"
+          title="Латиница в нижнем регистре, цифры и одиночные дефисы"
+          spellcheck=${false}
+          value=${slug}
+          onChange=${(event) => setSlug(normalizeSlugInput(event.target.value))}
+        />
+      </label>
+      <${ErrorText}>${error}</${ErrorText}>
+      <div className="row">
+        <button type="submit" disabled=${pending}>
+          ${pending ? 'Подключение…' : 'Подключиться'}
+        </button>
+        <button
+          type="button"
+          className="ghost"
+          disabled=${pending}
+          onClick=${onBack}
+        >
+          Назад
+        </button>
+      </div>
+    </form>
+  </main>`;
+}
+
+function RoomsScreen({ auth, onOpen, onJoinByLink, onLogout, onUnauthorized }) {
   const authed = useClient(auth, onUnauthorized);
   const [rooms, setRooms] = useState([]);
   const [total, setTotal] = useState(0);
@@ -459,7 +528,6 @@ function RoomsScreen({ auth, onOpen, onLogout, onUnauthorized }) {
   const [editing, setEditing] = useState(null);
   const [savingEdit, setSavingEdit] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
-  const [openingSlug, setOpeningSlug] = useState(null);
   const autoJoinStarted = useRef(false);
 
   async function loadRooms() {
@@ -476,27 +544,20 @@ function RoomsScreen({ auth, onOpen, onLogout, onUnauthorized }) {
     }
   }
 
-  async function openRoom(slugValue) {
-    if (openingSlug) return;
-    setOpeningSlug(slugValue);
-    setActionError('');
-    try {
-      const data = await authed(
-        `/rooms/by-slug/${encodeURIComponent(slugValue)}/join`,
-        { method: 'POST', body: {} },
-      );
-      onOpen({
-        conferenceId: data.conferenceId,
-        conferenceStatus: data.conferenceStatus,
-        sessionId: data.sessionId,
-        participantId: data.participantId,
-        role: data.role,
-        room: data.room,
-      });
-    } catch (error) {
-      if (error.status !== 401) setActionError(error.message);
-      setOpeningSlug(null);
-    }
+  function openRoom(roomOrSlug) {
+    const source = typeof roomOrSlug === 'string' ? null : roomOrSlug;
+    const slugValue = source ? source.slug : roomOrSlug;
+    onOpen({
+      room: {
+        slug: slugValue,
+        name: source?.name || slugValue,
+        type: source?.type,
+        accessType: source?.accessType,
+        status: source?.status,
+      },
+      guestName: null,
+      guestToken: null,
+    });
   }
 
   useEffect(() => {
@@ -594,6 +655,9 @@ function RoomsScreen({ auth, onOpen, onLogout, onUnauthorized }) {
 
   return html`<main className="page">
     <${Topbar} title="Комнаты" user=${auth.user}>
+      <button type="button" className="ghost" onClick=${onJoinByLink}>
+        По ссылке
+      </button>
       <button type="button" className="ghost" onClick=${onLogout}>Выйти</button>
     </${Topbar}>
 
@@ -704,23 +768,17 @@ function RoomsScreen({ auth, onOpen, onLogout, onUnauthorized }) {
               <button
                 type="button"
                 className="room-open"
-                disabled=${openingSlug !== null}
-                onClick=${() => openRoom(room.slug)}
+                onClick=${() => openRoom(room)}
               >
                 <strong>${room.name}</strong>
                 <code>${room.slug}</code>
                 <span className="muted">${roomMeta(room)}</span>
-                ${openingSlug === room.slug
-                  ? html`<span>Подключение…</span>`
-                  : null}
               </button>
               <div className="room-actions">
                 <button
                   type="button"
                   className="ghost"
-                  disabled=${room.status === 'ENDED' ||
-                  openingSlug !== null ||
-                  deletingId !== null}
+                  disabled=${room.status === 'ENDED' || deletingId !== null}
                   onClick=${() => startEdit(room)}
                 >
                   Изменить
@@ -728,7 +786,7 @@ function RoomsScreen({ auth, onOpen, onLogout, onUnauthorized }) {
                 <button
                   type="button"
                   className="danger"
-                  disabled=${deletingId === room.id || openingSlug !== null}
+                  disabled=${deletingId === room.id}
                   onClick=${() => removeRoom(room)}
                 >
                   ${deletingId === room.id ? 'Удаление…' : 'Удалить'}
@@ -743,78 +801,239 @@ function RoomsScreen({ auth, onOpen, onLogout, onUnauthorized }) {
   </main>`;
 }
 
-function CallScreen({ auth, call, onLeave, onLogout, onUnauthorized }) {
-  const authed = useClient(
-    auth?.accessToken
-      ? { accessToken: auth.accessToken }
-      : { guestToken: call.guestToken },
-    onUnauthorized,
-  );
+function wsErrorText(error) {
+  const message = error?.message;
+  if (Array.isArray(message)) return message.join('\n');
+  return message || 'Ошибка соединения';
+}
+
+function CallScreen({ auth, call, onLeave, onUpdate, onLogout, onUnauthorized }) {
   const [participants, setParticipants] = useState([]);
   const [messages, setMessages] = useState([]);
   const [messageTotal, setMessageTotal] = useState(0);
   const [error, setError] = useState('');
-  const [refreshing, setRefreshing] = useState(false);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [leaving, setLeaving] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [joined, setJoined] = useState(false);
+  const [connected, setConnected] = useState(false);
   const [conferenceStatus, setConferenceStatus] = useState(
-    call.conferenceStatus,
+    call.conferenceStatus || null,
   );
+  const [myParticipantId, setMyParticipantId] = useState(
+    call.participantId || null,
+  );
+  const [sessionId, setSessionId] = useState(call.sessionId || null);
   const listRef = useRef(null);
+  const socketRef = useRef(null);
+  const leavingRef = useRef(false);
+  const accessTokenRef = useRef(auth?.accessToken || '');
+  const guestTokenRef = useRef(
+    call.guestToken || readGuestToken(call.room.slug) || '',
+  );
+  const conferenceIdRef = useRef(call.conferenceId || null);
+  const onLeaveRef = useRef(onLeave);
+  const onUpdateRef = useRef(onUpdate);
+  const onUnauthorizedRef = useRef(onUnauthorized);
+  accessTokenRef.current = auth?.accessToken || '';
+  onLeaveRef.current = onLeave;
+  onUpdateRef.current = onUpdate;
+  onUnauthorizedRef.current = onUnauthorized;
   const link = roomUrl(call.room.slug);
+  const slug = call.room.slug;
+  const guestName = call.guestName || '';
 
-  async function load() {
-    const [people, history, details] = await Promise.all([
-      authed(`/conferences/${call.conferenceId}/participants?limit=100`),
-      authed(`/conferences/${call.conferenceId}/messages?limit=100`),
-      authed(`/conferences/${call.conferenceId}`),
-    ]);
-    setParticipants(
-      people.items.filter((person) => person.activeSessionsCount > 0),
-    );
-    setMessages(history.items);
-    setMessageTotal(history.total);
-    setConferenceStatus(details.status);
+  function rememberMessage(message) {
+    setMessages((current) => {
+      if (current.some((item) => item.id === message.id)) return current;
+      return [message, ...current];
+    });
   }
-
-  async function refresh() {
-    setRefreshing(true);
-    setError('');
-    try {
-      await load();
-    } catch (loadError) {
-      if (loadError.status !== 401) setError(loadError.message);
-    } finally {
-      setRefreshing(false);
-    }
-  }
-
-  useEffect(() => {
-    void refresh();
-  }, []);
 
   useEffect(() => {
     const node = listRef.current;
     if (node) node.scrollTop = node.scrollHeight;
   }, [messages]);
 
+  useEffect(() => {
+    if (typeof io !== 'function') {
+      setError('Не загружен клиент WebSocket');
+      return undefined;
+    }
+
+    let disposed = false;
+    const knownMessageIds = new Set();
+    const socket = io(`${location.origin}/conferences`, {
+      transports: ['websocket'],
+      reconnection: true,
+      reconnectionDelay: 1000,
+      auth: (callback) => {
+        if (accessTokenRef.current) {
+          callback({ token: accessTokenRef.current });
+          return;
+        }
+        if (guestTokenRef.current) {
+          callback({ guestToken: guestTokenRef.current });
+          return;
+        }
+        callback({});
+      },
+    });
+    socketRef.current = socket;
+
+    function upsertParticipant(participant) {
+      setParticipants((current) => {
+        const index = current.findIndex((item) => item.id === participant.id);
+        if (index === -1) return [...current, participant];
+        const next = current.slice();
+        next[index] = participant;
+        return next;
+      });
+    }
+
+    async function loadHistory(conferenceId) {
+      try {
+        const page = await request(
+          `/conferences/${conferenceId}/messages?limit=100`,
+          accessTokenRef.current
+            ? { token: accessTokenRef.current }
+            : { guestToken: guestTokenRef.current || undefined },
+        );
+        if (disposed) return;
+        for (const item of page.items) knownMessageIds.add(item.id);
+        setMessages((current) => {
+          const byId = new Map(page.items.map((item) => [item.id, item]));
+          for (const item of current) byId.set(item.id, item);
+          return [...byId.values()].sort(
+            (left, right) =>
+              new Date(right.createdAt) - new Date(left.createdAt),
+          );
+        });
+        setMessageTotal(page.total);
+      } catch (loadError) {
+        if (!disposed && loadError.status !== 401) setError(loadError.message);
+        if (loadError.status === 401) onUnauthorizedRef.current();
+      }
+    }
+
+    function joinConference() {
+      const payload = { slug };
+      if (!accessTokenRef.current) {
+        payload.guestName = guestName || 'Гость';
+      }
+      socket.timeout(8000).emit('conference:join', payload, (err, response) => {
+        if (disposed) return;
+        if (err) {
+          setError('Не удалось войти в конференцию');
+          return;
+        }
+        if (response?.error) {
+          setError(wsErrorText(response.error));
+          if (response.error.statusCode === 401) onUnauthorizedRef.current();
+          return;
+        }
+
+        conferenceIdRef.current = response.conferenceId;
+        guestTokenRef.current = response.guestToken || guestTokenRef.current;
+        if (response.guestToken) writeGuestToken(slug, response.guestToken);
+        setSessionId(response.sessionId);
+        setMyParticipantId(response.participantId);
+        setConferenceStatus(response.conferenceStatus);
+        setJoined(true);
+        setError('');
+        onUpdateRef.current({
+          conferenceId: response.conferenceId,
+          conferenceStatus: response.conferenceStatus,
+          sessionId: response.sessionId,
+          participantId: response.participantId,
+          role: response.role,
+          guestToken: response.guestToken,
+          room: response.room,
+        });
+        void loadHistory(response.conferenceId);
+      });
+    }
+
+    socket.on('connect', () => {
+      setConnected(true);
+      joinConference();
+    });
+    socket.on('disconnect', (reason) => {
+      setConnected(false);
+      setJoined(false);
+      if (disposed || leavingRef.current) return;
+      if (reason === 'io server disconnect') {
+        setError('Сервер закрыл соединение');
+      }
+    });
+    socket.on('connect_error', (connectError) => {
+      const statusCode = connectError?.data?.statusCode;
+      if (statusCode === 401) {
+        onUnauthorizedRef.current();
+        return;
+      }
+      setError(connectError?.message || 'Не удалось открыть WebSocket');
+    });
+    socket.on('conference:state', (state) => {
+      setParticipants(state.participants || []);
+      setConferenceStatus(state.status);
+    });
+    socket.on('conference:updated', (payload) => {
+      setConferenceStatus(payload.status);
+    });
+    socket.on('conference:ended', (payload) => {
+      setConferenceStatus(payload.status || 'ENDED');
+      setParticipants([]);
+    });
+    socket.on('participant:joined', (payload) => {
+      if (payload.participant) upsertParticipant(payload.participant);
+    });
+    socket.on('participant:updated', (payload) => {
+      if (payload.participant) upsertParticipant(payload.participant);
+    });
+    socket.on('participant:left', (payload) => {
+      setParticipants((current) =>
+        current.filter((item) => item.id !== payload.participantId),
+      );
+    });
+    socket.on('message:created', (message) => {
+      if (knownMessageIds.has(message.id)) return;
+      knownMessageIds.add(message.id);
+      rememberMessage(message);
+      setMessageTotal((count) => count + 1);
+    });
+
+    return () => {
+      disposed = true;
+      socket.disconnect();
+      if (socketRef.current === socket) socketRef.current = null;
+    };
+  }, [slug, guestName]);
+
   async function sendMessage(event) {
     event.preventDefault();
     const content = draft.trim();
-    if (!content) return;
+    const conferenceId = conferenceIdRef.current;
+    if (!content || !conferenceId) return;
     setSending(true);
     setError('');
     try {
-      await authed(`/conferences/${call.conferenceId}/messages`, {
-        method: 'POST',
-        body: { content },
-      });
+      const created = await request(
+        `/conferences/${conferenceId}/messages`,
+        {
+          method: 'POST',
+          body: { content },
+          ...(accessTokenRef.current
+            ? { token: accessTokenRef.current }
+            : { guestToken: guestTokenRef.current || undefined }),
+        },
+      );
       setDraft('');
-      await load();
+      rememberMessage({ ...created, isMine: true });
     } catch (sendError) {
-      if (sendError.status !== 401) setError(sendError.message);
+      if (sendError.status === 401) onUnauthorizedRef.current();
+      else setError(sendError.message);
     } finally {
       setSending(false);
     }
@@ -837,24 +1056,20 @@ function CallScreen({ auth, call, onLeave, onLogout, onUnauthorized }) {
     }
   }
 
-  async function leave() {
+  function leave() {
+    leavingRef.current = true;
     setLeaving(true);
     setError('');
-    try {
-      await authed(`/conferences/sessions/${call.sessionId}/leave`, {
-        method: 'POST',
-      });
-      onLeave();
-    } catch (leaveError) {
-      if (leaveError.status === 404) {
-        onLeave();
-        return;
-      }
-      if (leaveError.status !== 401) {
-        setError(leaveError.message);
-        setLeaving(false);
-      }
+    const socket = socketRef.current;
+    const finish = () => {
+      socket?.disconnect();
+      onLeaveRef.current();
+    };
+    if (!socket?.connected) {
+      finish();
+      return;
     }
+    socket.timeout(8000).emit('conference:leave', () => finish());
   }
 
   const ordered = [...messages].reverse();
@@ -864,13 +1079,6 @@ function CallScreen({ auth, call, onLeave, onLogout, onUnauthorized }) {
       title=${call.room.name}
       user=${auth?.user || { name: call.guestName || 'Гость', email: 'гость' }}
     >
-      <button
-        type="button"
-        disabled=${refreshing || leaving}
-        onClick=${refresh}
-      >
-        ${refreshing ? 'Обновление…' : 'Обновить'}
-      </button>
       <button
         type="button"
         className="danger"
@@ -898,7 +1106,11 @@ function CallScreen({ auth, call, onLeave, onLogout, onUnauthorized }) {
         </button>
       </div>
       <p className="muted">
-        Конференция ${label(STATUS_LABEL, conferenceStatus)} · подключение ${call.sessionId}
+        ${joined
+          ? `Конференция ${label(STATUS_LABEL, conferenceStatus)}`
+          : 'Подключение к конференции…'}
+        ${connected ? ' · сокет подключён' : ' · сокет отключён'}
+        ${sessionId ? ` · ${sessionId}` : ''}
       </p>
     </section>
 
@@ -911,22 +1123,22 @@ function CallScreen({ auth, call, onLeave, onLogout, onUnauthorized }) {
         </h2>
         ${participants.length === 0
           ? html`<p className="muted">
-              ${refreshing ? 'Загрузка…' : 'Пока никого нет'}
+              ${joined ? 'Пока никого нет' : 'Подключение…'}
             </p>`
           : html`<ul className="people">
               ${participants.map(
                 (person) => html`<li
                   key=${person.id}
-                  className=${person.isMe ? 'me' : ''}
+                  className=${person.id === myParticipantId ? 'me' : ''}
                 >
-                  <strong>${person.displayName}</strong>
+                  <strong>${person.name}</strong>
                   <span>
-                    ${label(ROLE_LABEL, person.role)}${person.isGuest
+                    ${label(ROLE_LABEL, person.role)}${person.guestId
                       ? ' · гость'
-                      : ''}${person.isMe ? ' · вы' : ''}
+                      : ''}${person.id === myParticipantId ? ' · вы' : ''}
                   </span>
                   <span className="muted">
-                    подключений: ${person.activeSessionsCount}
+                    подключений: ${person.connectionsCount}
                   </span>
                 </li>`,
               )}
@@ -943,9 +1155,7 @@ function CallScreen({ auth, call, onLeave, onLogout, onUnauthorized }) {
             </p>`
           : null}
         ${ordered.length === 0
-          ? html`<p className="muted">
-              ${refreshing ? 'Загрузка…' : 'Сообщений пока нет'}
-            </p>`
+          ? html`<p className="muted">Сообщений пока нет</p>`
           : html`<ul className="thread" ref=${listRef}>
               ${ordered.map(
                 (message) => html`<li
@@ -970,14 +1180,18 @@ function CallScreen({ auth, call, onLeave, onLogout, onUnauthorized }) {
           maxLength="2000"
           placeholder="Текст сообщения"
           value=${draft}
-          disabled=${sending || leaving}
+          disabled=${sending || leaving || !joined || conferenceStatus !== 'ACTIVE'}
           onChange=${(event) => setDraft(event.target.value)}
           onKeyDown=${onComposerKeyDown}
         ></textarea>
         <p className="muted">${draft.trim().length}/2000 · Enter — отправить</p>
         <button
           type="submit"
-          disabled=${sending || leaving || !draft.trim()}
+          disabled=${sending ||
+          leaving ||
+          !joined ||
+          conferenceStatus !== 'ACTIVE' ||
+          !draft.trim()}
         >
           ${sending ? 'Отправка…' : 'Отправить'}
         </button>
@@ -990,6 +1204,7 @@ function App() {
   const [auth, setAuth] = useState(readAuth);
   const [call, setCall] = useState(readCall);
   const [notice, setNotice] = useState('');
+  const [joinByLink, setJoinByLink] = useState(false);
 
   function clearClient() {
     writeAuth(null);
@@ -1006,23 +1221,8 @@ function App() {
 
   function logout() {
     const current = auth;
-    const currentCall = call;
     clearClient();
     setNotice('');
-    if (currentCall?.sessionId) {
-      const headers = {};
-      if (current?.accessToken) {
-        headers.Authorization = `Bearer ${current.accessToken}`;
-      } else if (currentCall.guestToken) {
-        headers['x-guest-token'] = currentCall.guestToken;
-      }
-      if (Object.keys(headers).length > 0) {
-        fetch(`${API}/conferences/sessions/${currentCall.sessionId}/leave`, {
-          method: 'POST',
-          headers,
-        }).catch(() => {});
-      }
-    }
     if (!current?.csrfToken) return;
     fetch(`${API}/auth/logout`, {
       method: 'POST',
@@ -1041,6 +1241,19 @@ function App() {
     );
   }
 
+  function updateCall(patch) {
+    setCall((current) => {
+      if (!current) return current;
+      const next = {
+        ...current,
+        ...patch,
+        room: patch.room ? { ...current.room, ...patch.room } : current.room,
+      };
+      writeCall(next);
+      return next;
+    });
+  }
+
   function openCall(next) {
     writeCall(next);
     setCall(next);
@@ -1057,11 +1270,23 @@ function App() {
 
   const slugFromUrl = new URLSearchParams(location.search).get('slug');
 
+  if (joinByLink && !call) {
+    return html`<${JoinScreen}
+      auth=${auth}
+      onJoin=${(next) => {
+        setJoinByLink(false);
+        openCall(next);
+      }}
+      onBack=${() => setJoinByLink(false)}
+      onUnauthorized=${expire}
+    />`;
+  }
   if (call) {
     return html`<${CallScreen}
       auth=${auth}
       call=${call}
       onLeave=${closeCall}
+      onUpdate=${updateCall}
       onLogout=${logout}
       onUnauthorized=${expire}
     />`;
@@ -1072,12 +1297,14 @@ function App() {
       slug=${slugFromUrl || ''}
       onSuccess=${login}
       onGuestJoin=${openCall}
+      onJoinByLink=${() => setJoinByLink(true)}
     />`;
   }
   return html`<${RoomsScreen}
     auth=${auth}
     onOpen=${openCall}
     onLogout=${logout}
+    onJoinByLink=${() => setJoinByLink(true)}
     onUnauthorized=${expire}
   />`;
 }
