@@ -25,6 +25,8 @@ import {
   lockRoom,
   UNFINISHED_CONFERENCE_STATUSES,
 } from './conference-lifecycle.js';
+import { ConferenceEventsService } from './conference-events.service.js';
+import { ConferencePresenceService } from './conference-presence.service.js';
 import type { ConferenceActor } from './conference.types.js';
 import {
   ConferenceDto,
@@ -41,9 +43,16 @@ export const participantUserSelect = {
   user: { select: { name: true, avatarUrl: true } },
 } satisfies Prisma.ConferenceParticipantInclude;
 
-type JoinIdentity =
+export type JoinIdentity =
   | { kind: 'user'; userId: number; authSessionId: string }
   | { kind: 'guest'; guestId: string; guestName: string };
+
+export interface JoinResult {
+  room: Room;
+  conference: Conference;
+  participant: ConferenceParticipant;
+  sessionId: string;
+}
 
 export interface ConferenceAccess {
   conference: Conference & { room: Room };
@@ -70,12 +79,13 @@ export class ConferencesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly guestTokensService: GuestTokensService,
+    private readonly presence: ConferencePresenceService,
+    private readonly events: ConferenceEventsService,
   ) {}
 
   /**
-   * Гость без токена или с недействительным токеном получает новый guestId.
-   * Под блокировкой комнаты конференция находится или создаётся атомарно,
-   * поэтому параллельные подключения не создадут вторую незавершённую конференцию.
+   * Подключение через REST. Гость без токена или с недействительным токеном получает новый guestId.
+   * Для новых клиентов основной способ входа — событие `conference:join` в WebSocket.
    */
   async join(
     slug: string,
@@ -84,96 +94,155 @@ export class ConferencesService {
     dto: JoinRoomDto,
     userAgent: string | undefined,
   ): Promise<JoinResponseDto> {
-    let identity: JoinIdentity;
+    const identity = this.resolveJoinIdentity(
+      user,
+      guestToken ? await this.guestTokensService.verify(guestToken) : null,
+      dto.guestName,
+    );
+    const roomId = await this.findRoomIdBySlug(slug);
+    const result = await this.joinRoom(
+      roomId,
+      identity,
+      dto.deviceType ?? detectDeviceType(userAgent),
+    );
 
+    return this.toJoinResponse(result, identity);
+  }
+
+  /** Личность берётся только из проверенной авторизации или подписанного гостевого токена. */
+  resolveJoinIdentity(
+    user: Pick<AuthUser, 'id' | 'sessionId'> | null,
+    guestId: string | null,
+    guestName: string | undefined,
+  ): JoinIdentity {
     if (user) {
-      identity = {
-        kind: 'user',
-        userId: user.id,
-        authSessionId: user.sessionId,
-      };
-    } else {
-      if (!dto.guestName) {
-        throw new BadRequestException('Гостю нужно указать имя');
-      }
-
-      const guestId =
-        (guestToken && (await this.guestTokensService.verify(guestToken))) ||
-        randomUUID();
-      identity = { kind: 'guest', guestId, guestName: dto.guestName };
+      return { kind: 'user', userId: user.id, authSessionId: user.sessionId };
     }
 
-    const roomRef = await this.prisma.room.findFirst({
+    if (!guestName) {
+      throw new BadRequestException('Гостю нужно указать имя');
+    }
+
+    return { kind: 'guest', guestId: guestId ?? randomUUID(), guestName };
+  }
+
+  async findRoomIdBySlug(slug: string): Promise<string> {
+    const room = await this.prisma.room.findFirst({
       where: { slug: slug.toLowerCase(), deletedAt: null },
       select: { id: true },
     });
 
-    if (!roomRef) {
+    if (!room) {
       throw new NotFoundException('Комната не найдена');
     }
 
-    const deviceType = dto.deviceType ?? detectDeviceType(userAgent);
+    return room.id;
+  }
 
-    const { room, conference, participant, sessionId } =
-      await this.prisma.$transaction(async (tx) => {
-        const room = await lockRoom(tx, roomRef.id);
+  /**
+   * Под блокировкой комнаты конференция находится или создаётся атомарно,
+   * поэтому параллельные подключения не создадут вторую незавершённую конференцию.
+   * `onJoined` выполняется после фиксации транзакции, пока блокировка комнаты ещё удерживается.
+   */
+  joinRoom(
+    roomId: string,
+    identity: JoinIdentity,
+    deviceType: DeviceType,
+  ): Promise<JoinResult>;
+  joinRoom<T>(
+    roomId: string,
+    identity: JoinIdentity,
+    deviceType: DeviceType,
+    onJoined: (result: JoinResult) => Promise<T>,
+  ): Promise<T>;
+  joinRoom<T>(
+    roomId: string,
+    identity: JoinIdentity,
+    deviceType: DeviceType,
+    onJoined?: (result: JoinResult) => Promise<T>,
+  ): Promise<JoinResult | T> {
+    return this.presence.withRoomLock(roomId, async () => {
+      const { reactivated, ...result } = await this.prisma.$transaction(
+        async (tx) => {
+          const room = await lockRoom(tx, roomId);
 
-        if (!room) {
-          throw new NotFoundException('Комната не найдена');
-        }
+          if (!room) {
+            throw new NotFoundException('Комната не найдена');
+          }
 
-        const now = new Date();
-        let conference = await tx.conference.findFirst({
-          where: {
-            roomId: room.id,
-            status: { in: UNFINISHED_CONFERENCE_STATUSES },
-          },
-        });
-        const joinError = getJoinError(
-          room,
-          identity.kind === 'user' ? identity.userId : null,
-          conference !== null,
-          now,
-        );
-
-        if (joinError) {
-          throw joinError;
-        }
-
-        if (!conference) {
-          conference = await tx.conference.create({
-            data: {
+          const now = new Date();
+          let conference = await tx.conference.findFirst({
+            where: {
               roomId: room.id,
-              status: ConferenceStatus.ACTIVE,
-              startedAt: now,
+              status: { in: UNFINISHED_CONFERENCE_STATUSES },
             },
           });
-        } else if (conference.status === ConferenceStatus.EMPTY) {
-          conference = await tx.conference.update({
-            where: { id: conference.id },
-            data: { status: ConferenceStatus.ACTIVE, emptyAt: null },
+          const joinError = getJoinError(
+            room,
+            identity.kind === 'user' ? identity.userId : null,
+            conference !== null,
+            now,
+          );
+
+          if (joinError) {
+            throw joinError;
+          }
+
+          const reactivated = conference?.status === ConferenceStatus.EMPTY;
+
+          if (!conference) {
+            conference = await tx.conference.create({
+              data: {
+                roomId: room.id,
+                status: ConferenceStatus.ACTIVE,
+                startedAt: now,
+              },
+            });
+          } else if (reactivated) {
+            conference = await tx.conference.update({
+              where: { id: conference.id },
+              data: { status: ConferenceStatus.ACTIVE, emptyAt: null },
+            });
+          }
+
+          const participant = await this.findOrCreateParticipant(
+            tx,
+            conference.id,
+            room,
+            identity,
+          );
+          const session = await tx.conferenceParticipantSession.create({
+            data: {
+              participantId: participant.id,
+              authSessionId:
+                identity.kind === 'user' ? identity.authSessionId : null,
+              deviceType,
+              joinedAt: now,
+            },
           });
-        }
 
-        const participant = await this.findOrCreateParticipant(
-          tx,
-          conference.id,
-          room,
-          identity,
-        );
-        const session = await tx.conferenceParticipantSession.create({
-          data: {
-            participantId: participant.id,
-            authSessionId:
-              identity.kind === 'user' ? identity.authSessionId : null,
-            deviceType,
-            joinedAt: now,
-          },
-        });
+          return {
+            room,
+            conference,
+            participant,
+            sessionId: session.id,
+            reactivated,
+          };
+        },
+      );
 
-        return { room, conference, participant, sessionId: session.id };
-      });
+      if (reactivated) {
+        this.events.conferenceUpdated(result.conference);
+      }
 
+      return onJoined ? onJoined(result) : result;
+    });
+  }
+
+  async toJoinResponse(
+    { room, conference, participant, sessionId }: JoinResult,
+    identity: JoinIdentity,
+  ): Promise<JoinResponseDto> {
     return {
       conferenceId: conference.id,
       conferenceStatus: conference.status,
@@ -186,6 +255,34 @@ export class ConferencesService {
           ? await this.guestTokensService.sign(identity.guestId)
           : null,
     };
+  }
+
+  /**
+   * Закрывает одно подключение и рассылает изменения участникам.
+   * Если подключение принадлежит другому сокету (выход через REST), этот сокет отключается.
+   */
+  closeSession(
+    roomId: string,
+    conferenceId: string,
+    sessionId: string,
+    initiatorSocketId?: string,
+  ): Promise<Conference> {
+    return this.presence.withRoomLock(roomId, async () => {
+      const { conference, emptied } = await this.prisma.$transaction(
+        async (tx) => {
+          await lockRoom(tx, roomId);
+
+          return closeSessions(tx, conferenceId, [sessionId], new Date());
+        },
+      );
+
+      await this.events.sessionsClosed(conferenceId, [sessionId], {
+        emptied: emptied ? conference : null,
+        initiatorSocketId,
+      });
+
+      return conference;
+    });
   }
 
   /** Закрывает только указанное подключение. Повторный вызов возвращает текущее состояние. */
@@ -213,27 +310,22 @@ export class ConferencesService {
       };
     }
 
-    return this.prisma.$transaction(async (tx) => {
-      await lockRoom(tx, initialConference.roomId);
+    const conference = await this.closeSession(
+      initialConference.roomId,
+      initialConference.id,
+      sessionId,
+    );
+    const { leftAt } =
+      await this.prisma.conferenceParticipantSession.findUniqueOrThrow({
+        where: { id: sessionId },
+      });
 
-      const { conference } = await closeSessions(
-        tx,
-        initialConference.id,
-        [sessionId],
-        new Date(),
-      );
-      const { leftAt } =
-        await tx.conferenceParticipantSession.findUniqueOrThrow({
-          where: { id: sessionId },
-        });
-
-      return {
-        sessionId,
-        leftAt: leftAt!,
-        conferenceId: conference.id,
-        conferenceStatus: conference.status,
-      };
-    });
+    return {
+      sessionId,
+      leftAt: leftAt!,
+      conferenceId: conference.id,
+      conferenceStatus: conference.status,
+    };
   }
 
   /** Повторный вызов для уже завершённой конференции безопасен. */
@@ -249,10 +341,19 @@ export class ConferencesService {
       );
     }
 
-    await this.prisma.$transaction(async (tx) => {
-      const room = await lockRoom(tx, access.conference.roomId);
+    const { roomId } = access.conference;
 
-      await finishConference(tx, conferenceId, room!, new Date());
+    await this.presence.withRoomLock(roomId, async () => {
+      const now = new Date();
+      const finished = await this.prisma.$transaction(async (tx) => {
+        const room = await lockRoom(tx, roomId);
+
+        return finishConference(tx, conferenceId, room!, now);
+      });
+
+      if (finished) {
+        this.events.conferenceEnded(conferenceId, now);
+      }
     });
 
     return this.findOne(conferenceId, { kind: 'user', userId });

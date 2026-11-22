@@ -13,7 +13,7 @@ import {
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { ConferenceSessionsService } from '../conferences/conference-sessions.service.js';
 import { REFRESH_TOKEN_TTL_SECONDS } from './auth.constants.js';
-import type { ClientMeta } from './auth.types.js';
+import type { AuthUser, ClientMeta } from './auth.types.js';
 import { safeEqual, TokensService } from './tokens.service.js';
 
 @Injectable()
@@ -107,6 +107,32 @@ export class SessionsService {
       user: session.user,
       sessionId: session.id,
       refreshToken: next.token,
+    };
+  }
+
+  /** Проверяет access token, активность сессии и учётной записи. Используется для HTTP и WebSocket. */
+  async authenticate(accessToken: string): Promise<AuthUser> {
+    const payload = await this.tokensService.verifyAccessToken(accessToken);
+
+    if (!payload) {
+      throw new UnauthorizedException('Недействительный access token');
+    }
+
+    const session = await this.findActive(payload.sid, Number(payload.sub));
+
+    if (!session) {
+      throw new UnauthorizedException('Сессия завершена');
+    }
+
+    if (session.user.status !== UserStatus.ACTIVE) {
+      throw new ForbiddenException('Учётная запись заблокирована');
+    }
+
+    return {
+      id: session.user.id,
+      email: session.user.email,
+      role: session.user.role,
+      sessionId: session.id,
     };
   }
 

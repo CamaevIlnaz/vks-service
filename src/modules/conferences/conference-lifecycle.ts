@@ -36,7 +36,7 @@ export async function closeSessions(
   conferenceId: string,
   sessionIds: string[],
   now: Date,
-): Promise<{ closed: number; conference: Conference }> {
+): Promise<{ closed: number; conference: Conference; emptied: boolean }> {
   const { count } = await tx.conferenceParticipantSession.updateMany({
     where: {
       id: { in: sessionIds },
@@ -48,6 +48,7 @@ export async function closeSessions(
   let conference = await tx.conference.findUniqueOrThrow({
     where: { id: conferenceId },
   });
+  let emptied = false;
 
   if (count > 0 && conference.status === ConferenceStatus.ACTIVE) {
     const activeSessions = await tx.conferenceParticipantSession.count({
@@ -59,10 +60,11 @@ export async function closeSessions(
         where: { id: conferenceId },
         data: { status: ConferenceStatus.EMPTY, emptyAt: now },
       });
+      emptied = true;
     }
   }
 
-  return { closed: count, conference };
+  return { closed: count, conference, emptied };
 }
 
 /** Вызывать только под `lockRoom`. Возвращает false, если конференция уже завершена. */

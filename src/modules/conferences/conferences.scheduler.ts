@@ -12,6 +12,8 @@ import {
   lockRoom,
   UNFINISHED_CONFERENCE_STATUSES,
 } from './conference-lifecycle.js';
+import { ConferenceEventsService } from './conference-events.service.js';
+import { ConferencePresenceService } from './conference-presence.service.js';
 import { ConferenceSessionsService } from './conference-sessions.service.js';
 
 const BATCH_SIZE = 100;
@@ -24,6 +26,8 @@ export class ConferencesScheduler {
   constructor(
     private readonly prisma: PrismaService,
     private readonly conferenceSessionsService: ConferenceSessionsService,
+    private readonly presence: ConferencePresenceService,
+    private readonly events: ConferenceEventsService,
   ) {}
 
   @Cron(CronExpression.EVERY_30_SECONDS)
@@ -34,6 +38,9 @@ export class ConferencesScheduler {
 
     this.running = true;
     try {
+      await this.conferenceSessionsService.closeStale().catch((error) => {
+        this.logger.error('Не удалось закрыть зависшие подключения', error);
+      });
       await this.conferenceSessionsService.closeUnauthorized();
       await this.finishEmptyConferences();
       await this.expireTemporaryRooms();
@@ -57,23 +64,35 @@ export class ConferencesScheduler {
 
     for (const candidate of candidates) {
       try {
-        const done = await this.prisma.$transaction(async (tx) => {
-          const room = await lockRoom(tx, candidate.roomId);
-          const conference = await tx.conference.findUnique({
-            where: { id: candidate.id },
-          });
+        const done = await this.presence.withRoomLock(
+          candidate.roomId,
+          async () => {
+            const endedAt = new Date();
+            const finished = await this.prisma.$transaction(async (tx) => {
+              const room = await lockRoom(tx, candidate.roomId);
+              const conference = await tx.conference.findUnique({
+                where: { id: candidate.id },
+              });
 
-          if (
-            !room ||
-            conference?.status !== ConferenceStatus.EMPTY ||
-            !conference.emptyAt ||
-            conference.emptyAt > threshold
-          ) {
-            return false;
-          }
+              if (
+                !room ||
+                conference?.status !== ConferenceStatus.EMPTY ||
+                !conference.emptyAt ||
+                conference.emptyAt > threshold
+              ) {
+                return false;
+              }
 
-          return finishConference(tx, conference.id, room, new Date());
-        });
+              return finishConference(tx, conference.id, room, endedAt);
+            });
+
+            if (finished) {
+              this.events.conferenceEnded(candidate.id, endedAt);
+            }
+
+            return finished;
+          },
+        );
 
         if (done) {
           finished += 1;

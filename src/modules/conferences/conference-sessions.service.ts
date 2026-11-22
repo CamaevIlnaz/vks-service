@@ -1,15 +1,48 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { Prisma, UserStatus } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { ConferenceEventsService } from './conference-events.service.js';
 import { closeSessions, lockRoom } from './conference-lifecycle.js';
+import { ConferencePresenceService } from './conference-presence.service.js';
 
 const BATCH_SIZE = 500;
 
 @Injectable()
-export class ConferenceSessionsService {
+export class ConferenceSessionsService implements OnApplicationBootstrap {
   private readonly logger = new Logger(ConferenceSessionsService.name);
+  private readonly startedAt = new Date();
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly presence: ConferencePresenceService,
+    private readonly events: ConferenceEventsService,
+  ) {}
+
+  /**
+   * После перезапуска присутствие в памяти пустое, а онлайн определяется только по нему,
+   * поэтому все подключения, открытые до старта процесса, считаются зависшими и закрываются.
+   * Опустевшие конференции переходят в EMPTY и завершатся через 3 минуты, если никто не переподключится.
+   */
+  async onApplicationBootstrap(): Promise<void> {
+    try {
+      let closed: number;
+      let total = 0;
+
+      do {
+        closed = await this.closeWhere(
+          { joinedAt: { lt: this.startedAt } },
+          new Date(),
+        );
+        total += closed;
+      } while (closed > 0);
+
+      if (total > 0) {
+        this.logger.log(`Закрыто зависших подключений: ${total}`);
+      }
+    } catch (error) {
+      this.logger.error('Не удалось закрыть зависшие подключения', error);
+    }
+  }
 
   /** Немедленно закрывает подключения отозванных сессий авторизации. Не бросает ошибок: пропущенное закроет планировщик. */
   async closeForAuthSessions(
@@ -46,6 +79,25 @@ export class ConferenceSessionsService {
     );
   }
 
+  /** Повторно закрывает подключения, которые не удалось закрыть в БД при разрыве соединения. */
+  async closeStale(now: Date = new Date()): Promise<void> {
+    const sessionIds = this.presence.staleSessionIds();
+
+    if (sessionIds.length === 0) {
+      return;
+    }
+
+    await this.closeWhere({ id: { in: sessionIds } }, now);
+
+    const stillOpen = await this.prisma.conferenceParticipantSession.findMany({
+      where: { id: { in: sessionIds }, leftAt: null },
+      select: { id: true },
+    });
+    const open = new Set(stillOpen.map((session) => session.id));
+
+    this.presence.unmarkStale(sessionIds.filter((id) => !open.has(id)));
+  }
+
   private async closeWhere(
     where: Prisma.ConferenceParticipantSessionWhereInput,
     now: Date,
@@ -79,9 +131,16 @@ export class ConferenceSessionsService {
 
     for (const [conferenceId, { roomId, ids }] of byConference) {
       try {
-        closed += await this.prisma.$transaction(async (tx) => {
-          await lockRoom(tx, roomId);
-          const result = await closeSessions(tx, conferenceId, ids, now);
+        closed += await this.presence.withRoomLock(roomId, async () => {
+          const result = await this.prisma.$transaction(async (tx) => {
+            await lockRoom(tx, roomId);
+
+            return closeSessions(tx, conferenceId, ids, now);
+          });
+
+          await this.events.sessionsClosed(conferenceId, ids, {
+            emptied: result.emptied ? result.conference : null,
+          });
 
           return result.closed;
         });

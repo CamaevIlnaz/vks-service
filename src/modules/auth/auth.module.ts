@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
@@ -18,7 +18,7 @@ import { TokensService } from './tokens.service.js';
   imports: [
     PrismaModule,
     UsersModule,
-    ConferencesModule,
+    forwardRef(() => ConferencesModule),
     ThrottlerModule.forRoot({ throttlers: [{ ttl: 60_000, limit: 30 }] }),
     JwtModule.registerAsync({
       inject: [ConfigService],
@@ -40,5 +40,6 @@ import { TokensService } from './tokens.service.js';
     CsrfGuard,
     { provide: APP_GUARD, useClass: JwtAuthGuard },
   ],
+  exports: [SessionsService],
 })
 export class AuthModule {}

@@ -6,6 +6,7 @@ import { ConfigService } from '@nestjs/config';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
+import { SocketIoAdapter } from './common/socket-io.adapter.js';
 import { AVATAR_MAX_BYTES } from './modules/users/avatar-file.js';
 
 export async function setupApp(app: NestFastifyApplication): Promise<void> {
@@ -49,7 +50,13 @@ export async function setupApp(app: NestFastifyApplication): Promise<void> {
     }),
   );
 
-  app.setGlobalPrefix(
-    app.get(ConfigService).getOrThrow<string>('app.apiPrefix'),
+  const configService = app.get(ConfigService);
+
+  app.setGlobalPrefix(configService.getOrThrow<string>('app.apiPrefix'));
+  app.useWebSocketAdapter(
+    new SocketIoAdapter(
+      app,
+      configService.getOrThrow<string[]>('app.corsOrigins'),
+    ),
   );
 }

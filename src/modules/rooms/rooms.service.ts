@@ -12,11 +12,13 @@ import {
 } from '../../generated/prisma/client.js';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { ConferenceEventsService } from '../conferences/conference-events.service.js';
 import {
   finishConference,
   lockRoom,
   UNFINISHED_CONFERENCE_STATUSES,
 } from '../conferences/conference-lifecycle.js';
+import { ConferencePresenceService } from '../conferences/conference-presence.service.js';
 import { CreateQuickRoomDto } from './dto/create-quick-room.dto.js';
 import { CreateRoomDto } from './dto/create-room.dto.js';
 import { PublicRoomDto } from './dto/public-room.dto.js';
@@ -48,7 +50,11 @@ export function isUniqueViolation(error: unknown): boolean {
 
 @Injectable()
 export class RoomsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly presence: ConferencePresenceService,
+    private readonly events: ConferenceEventsService,
+  ) {}
 
   async create(ownerId: number, dto: CreateRoomDto): Promise<RoomDto> {
     const data: RoomCreateData = {
@@ -196,26 +202,35 @@ export class RoomsService {
 
   /** Комната помечается удалённой, незавершённая конференция завершается, история остаётся. */
   async remove(ownerId: number, id: string): Promise<void> {
-    await this.prisma.$transaction(async (tx) => {
-      const room = await lockRoom(tx, id);
-
-      if (!room || room.ownerId !== ownerId || room.deletedAt) {
-        throw new NotFoundException('Комната не найдена');
-      }
-
+    await this.presence.withRoomLock(id, async () => {
       const now = new Date();
-      const conference = await tx.conference.findFirst({
-        where: {
-          roomId: id,
-          status: { in: UNFINISHED_CONFERENCE_STATUSES },
+      const finishedConferenceId = await this.prisma.$transaction(
+        async (tx) => {
+          const room = await lockRoom(tx, id);
+
+          if (!room || room.ownerId !== ownerId || room.deletedAt) {
+            throw new NotFoundException('Комната не найдена');
+          }
+
+          const conference = await tx.conference.findFirst({
+            where: {
+              roomId: id,
+              status: { in: UNFINISHED_CONFERENCE_STATUSES },
+            },
+          });
+          const finished =
+            conference !== null &&
+            (await finishConference(tx, conference.id, room, now));
+
+          await tx.room.update({ where: { id }, data: { deletedAt: now } });
+
+          return finished ? conference.id : null;
         },
-      });
+      );
 
-      if (conference) {
-        await finishConference(tx, conference.id, room, now);
+      if (finishedConferenceId) {
+        this.events.conferenceEnded(finishedConferenceId, now);
       }
-
-      await tx.room.update({ where: { id }, data: { deletedAt: now } });
     });
   }
 

@@ -1,22 +1,18 @@
 import {
   CanActivate,
   ExecutionContext,
-  ForbiddenException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { UserStatus } from '../../../generated/prisma/client.js';
 import { IS_OPTIONAL_AUTH_KEY, IS_PUBLIC_KEY } from '../auth.constants.js';
 import type { AuthenticatedRequest } from '../auth.types.js';
 import { SessionsService } from '../sessions.service.js';
-import { TokensService } from '../tokens.service.js';
 
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
-    private readonly tokensService: TokensService,
     private readonly sessionsService: SessionsService,
   ) {}
 
@@ -47,31 +43,7 @@ export class JwtAuthGuard implements CanActivate {
       throw new UnauthorizedException('Требуется access token');
     }
 
-    const payload = await this.tokensService.verifyAccessToken(token);
-
-    if (!payload) {
-      throw new UnauthorizedException('Недействительный access token');
-    }
-
-    const session = await this.sessionsService.findActive(
-      payload.sid,
-      Number(payload.sub),
-    );
-
-    if (!session) {
-      throw new UnauthorizedException('Сессия завершена');
-    }
-
-    if (session.user.status !== UserStatus.ACTIVE) {
-      throw new ForbiddenException('Учётная запись заблокирована');
-    }
-
-    request.user = {
-      id: session.user.id,
-      email: session.user.email,
-      role: session.user.role,
-      sessionId: session.id,
-    };
+    request.user = await this.sessionsService.authenticate(token);
 
     return true;
   }

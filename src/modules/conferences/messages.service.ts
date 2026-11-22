@@ -6,6 +6,7 @@ import {
 import { ConferenceStatus, Prisma } from '../../generated/prisma/client.js';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { ConferenceEventsService } from './conference-events.service.js';
 import type { ConferenceActor } from './conference.types.js';
 import {
   ConferencesService,
@@ -19,6 +20,7 @@ export class MessagesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly conferencesService: ConferencesService,
+    private readonly events: ConferenceEventsService,
   ) {}
 
   async list(
@@ -95,6 +97,10 @@ export class MessagesService {
       });
     });
 
-    return MessageDto.fromEntity(message, participant.id);
+    const created = MessageDto.fromEntity(message, participant.id);
+
+    this.events.messageCreated(conferenceId, created);
+
+    return created;
   }
 }

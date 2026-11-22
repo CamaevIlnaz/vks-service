@@ -1,9 +1,13 @@
-import { Module } from '@nestjs/common';
+import { forwardRef, Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { PrismaModule } from '../../prisma/prisma.module.js';
+import { AuthModule } from '../auth/auth.module.js';
+import { ConferenceEventsService } from './conference-events.service.js';
+import { ConferencePresenceService } from './conference-presence.service.js';
 import { ConferenceSessionsService } from './conference-sessions.service.js';
 import { ConferencesController } from './conferences.controller.js';
+import { ConferencesGateway } from './conferences.gateway.js';
 import { ConferencesScheduler } from './conferences.scheduler.js';
 import { ConferencesService } from './conferences.service.js';
 import { ConferenceActorGuard } from './guards/conference-actor.guard.js';
@@ -19,6 +23,8 @@ import { RoomConferencesController } from './room-conferences.controller.js';
 @Module({
   imports: [
     PrismaModule,
+    // AuthModule закрывает подключения через ConferenceSessionsService, а гейтвей проверяет токены через SessionsService.
+    forwardRef(() => AuthModule),
     // Отдельный секрет и audience: гостевой токен нельзя выдать за access token и наоборот.
     JwtModule.registerAsync({
       inject: [ConfigService],
@@ -48,7 +54,14 @@ import { RoomConferencesController } from './room-conferences.controller.js';
     ConferenceActorGuard,
     ConferencesScheduler,
     ConferenceSessionsService,
+    ConferencePresenceService,
+    ConferenceEventsService,
+    ConferencesGateway,
   ],
-  exports: [ConferenceSessionsService],
+  exports: [
+    ConferenceSessionsService,
+    ConferencePresenceService,
+    ConferenceEventsService,
+  ],
 })
 export class ConferencesModule {}
