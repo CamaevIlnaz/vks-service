@@ -1,4 +1,5 @@
 import {
+  Conference,
   ConferenceStatus,
   Prisma,
   Room,
@@ -24,6 +25,44 @@ export async function lockRoom(
   await tx.$queryRaw`SELECT 1 FROM "Room" WHERE "id" = ${roomId}::uuid FOR UPDATE`;
 
   return tx.room.findUnique({ where: { id: roomId } });
+}
+
+/**
+ * Вызывать только под `lockRoom`. Закрывает указанные подключения конференции;
+ * если незакрытых подключений не осталось, переводит ACTIVE-конференцию в EMPTY.
+ */
+export async function closeSessions(
+  tx: Prisma.TransactionClient,
+  conferenceId: string,
+  sessionIds: string[],
+  now: Date,
+): Promise<{ closed: number; conference: Conference }> {
+  const { count } = await tx.conferenceParticipantSession.updateMany({
+    where: {
+      id: { in: sessionIds },
+      leftAt: null,
+      participant: { conferenceId },
+    },
+    data: { leftAt: now },
+  });
+  let conference = await tx.conference.findUniqueOrThrow({
+    where: { id: conferenceId },
+  });
+
+  if (count > 0 && conference.status === ConferenceStatus.ACTIVE) {
+    const activeSessions = await tx.conferenceParticipantSession.count({
+      where: { leftAt: null, participant: { conferenceId } },
+    });
+
+    if (activeSessions === 0) {
+      conference = await tx.conference.update({
+        where: { id: conferenceId },
+        data: { status: ConferenceStatus.EMPTY, emptyAt: now },
+      });
+    }
+  }
+
+  return { closed: count, conference };
 }
 
 /** Вызывать только под `lockRoom`. Возвращает false, если конференция уже завершена. */

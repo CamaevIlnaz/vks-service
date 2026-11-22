@@ -25,26 +25,49 @@ function nextIp(): string {
 
 interface TestUser {
   id: number;
+  email: string;
   auth: { authorization: string };
 }
 
+const PASSWORD = 'correct-horse-battery';
+
 async function createUser(name = 'Тест'): Promise<TestUser> {
+  const email = `user-${randomUUID()}@${EMAIL_DOMAIN}`;
   const response = await app.inject({
     method: 'POST',
     url: `/${prefix}/auth/register`,
     remoteAddress: nextIp(),
-    payload: {
-      email: `user-${randomUUID()}@${EMAIL_DOMAIN}`,
-      password: 'correct-horse-battery',
-      name,
-    },
+    payload: { email, password: PASSWORD, name },
   });
   const body = response.json();
 
   return {
     id: body.user.id,
+    email,
     auth: { authorization: `Bearer ${body.accessToken}` },
   };
+}
+
+async function loginAgain(user: TestUser): Promise<TestUser> {
+  const response = await app.inject({
+    method: 'POST',
+    url: `/${prefix}/auth/login`,
+    remoteAddress: nextIp(),
+    payload: { email: user.email, password: PASSWORD },
+  });
+
+  return {
+    ...user,
+    auth: { authorization: `Bearer ${response.json().accessToken}` },
+  };
+}
+
+async function sessionLeftAt(sessionId: string): Promise<Date | null> {
+  const session = await prisma.conferenceParticipantSession.findUniqueOrThrow({
+    where: { id: sessionId },
+  });
+
+  return session.leftAt;
 }
 
 function api(
@@ -460,6 +483,86 @@ describe('подключение и выход', () => {
       where: { id: first.conferenceId },
     });
     expect(active.emptyAt).toBeNull();
+  });
+});
+
+describe('окончание авторизации', () => {
+  it('logout-all закрывает все подключения пользователя, конференция становится EMPTY', async () => {
+    const owner = await createUser();
+    const room = await createRoom(owner);
+    const first = (await join(room.slug, { headers: owner.auth })).json();
+    const second = (await join(room.slug, { headers: owner.auth })).json();
+
+    const logout = await api('POST', '/auth/logout-all', {
+      headers: owner.auth,
+    });
+    expect(logout.statusCode).toBe(204);
+
+    expect(await sessionLeftAt(first.sessionId)).toBeInstanceOf(Date);
+    expect(await sessionLeftAt(second.sessionId)).toBeInstanceOf(Date);
+    const conference = await prisma.conference.findUniqueOrThrow({
+      where: { id: first.conferenceId },
+    });
+    expect(conference.status).toBe('EMPTY');
+    expect(conference.emptyAt).toBeInstanceOf(Date);
+  });
+
+  it('отзыв сессии другого устройства закрывает только его подключение', async () => {
+    const owner = await createUser();
+    const phone = await loginAgain(owner);
+    const room = await createRoom(owner);
+    const desktopJoin = (await join(room.slug, { headers: owner.auth })).json();
+    const phoneJoin = (await join(room.slug, { headers: phone.auth })).json();
+    const phoneAuthSession =
+      await prisma.conferenceParticipantSession.findUniqueOrThrow({
+        where: { id: phoneJoin.sessionId },
+      });
+
+    const revoke = await api(
+      'DELETE',
+      `/auth/sessions/${phoneAuthSession.authSessionId}`,
+      { headers: owner.auth },
+    );
+    expect(revoke.statusCode).toBe(204);
+
+    expect(await sessionLeftAt(phoneJoin.sessionId)).toBeInstanceOf(Date);
+    expect(await sessionLeftAt(desktopJoin.sessionId)).toBeNull();
+    expect(
+      (
+        await prisma.conference.findUniqueOrThrow({
+          where: { id: desktopJoin.conferenceId },
+        })
+      ).status,
+    ).toBe('ACTIVE');
+  });
+
+  it('планировщик закрывает подключения с истёкшей сессией авторизации', async () => {
+    const owner = await createUser();
+    const member = await createUser();
+    const room = await createRoom(owner);
+    const ownerJoin = (await join(room.slug, { headers: owner.auth })).json();
+    const memberJoin = (await join(room.slug, { headers: member.auth })).json();
+    const guestJoin = (
+      await join(room.slug, { payload: { guestName: 'Гость' } })
+    ).json();
+
+    await prisma.authSession.updateMany({
+      where: { userId: member.id },
+      data: { expiresAt: new Date(Date.now() - 1000) },
+    });
+    await scheduler.handleTick();
+
+    expect(await sessionLeftAt(memberJoin.sessionId)).toBeInstanceOf(Date);
+    expect(await sessionLeftAt(ownerJoin.sessionId)).toBeNull();
+    expect(await sessionLeftAt(guestJoin.sessionId)).toBeNull();
+    expect(
+      (
+        await api('POST', `/conferences/${memberJoin.conferenceId}/messages`, {
+          headers: member.auth,
+          payload: { content: 'Привет' },
+        })
+      ).statusCode,
+    ).toBe(401);
   });
 });
 

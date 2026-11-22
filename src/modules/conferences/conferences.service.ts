@@ -16,9 +16,11 @@ import {
 } from '../../generated/prisma/client.js';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import type { AuthUser } from '../auth/auth.types.js';
 import { PublicRoomDto } from '../rooms/dto/public-room.dto.js';
 import { getJoinError } from '../rooms/room-access.js';
 import {
+  closeSessions,
   finishConference,
   lockRoom,
   UNFINISHED_CONFERENCE_STATUSES,
@@ -40,7 +42,7 @@ export const participantUserSelect = {
 } satisfies Prisma.ConferenceParticipantInclude;
 
 type JoinIdentity =
-  | { kind: 'user'; userId: number }
+  | { kind: 'user'; userId: number; authSessionId: string }
   | { kind: 'guest'; guestId: string; guestName: string };
 
 export interface ConferenceAccess {
@@ -77,15 +79,19 @@ export class ConferencesService {
    */
   async join(
     slug: string,
-    userId: number | null,
+    user: Pick<AuthUser, 'id' | 'sessionId'> | null,
     guestToken: string | undefined,
     dto: JoinRoomDto,
     userAgent: string | undefined,
   ): Promise<JoinResponseDto> {
     let identity: JoinIdentity;
 
-    if (userId !== null) {
-      identity = { kind: 'user', userId };
+    if (user) {
+      identity = {
+        kind: 'user',
+        userId: user.id,
+        authSessionId: user.sessionId,
+      };
     } else {
       if (!dto.guestName) {
         throw new BadRequestException('Гостю нужно указать имя');
@@ -156,7 +162,13 @@ export class ConferencesService {
           identity,
         );
         const session = await tx.conferenceParticipantSession.create({
-          data: { participantId: participant.id, deviceType, joinedAt: now },
+          data: {
+            participantId: participant.id,
+            authSessionId:
+              identity.kind === 'user' ? identity.authSessionId : null,
+            deviceType,
+            joinedAt: now,
+          },
         });
 
         return { room, conference, participant, sessionId: session.id };
@@ -204,28 +216,12 @@ export class ConferencesService {
     return this.prisma.$transaction(async (tx) => {
       await lockRoom(tx, initialConference.roomId);
 
-      const now = new Date();
-      const { count } = await tx.conferenceParticipantSession.updateMany({
-        where: { id: sessionId, leftAt: null },
-        data: { leftAt: now },
-      });
-      let conference = await tx.conference.findUniqueOrThrow({
-        where: { id: initialConference.id },
-      });
-
-      if (count > 0 && conference.status === ConferenceStatus.ACTIVE) {
-        const activeSessions = await tx.conferenceParticipantSession.count({
-          where: { leftAt: null, participant: { conferenceId: conference.id } },
-        });
-
-        if (activeSessions === 0) {
-          conference = await tx.conference.update({
-            where: { id: conference.id },
-            data: { status: ConferenceStatus.EMPTY, emptyAt: now },
-          });
-        }
-      }
-
+      const { conference } = await closeSessions(
+        tx,
+        initialConference.id,
+        [sessionId],
+        new Date(),
+      );
       const { leftAt } =
         await tx.conferenceParticipantSession.findUniqueOrThrow({
           where: { id: sessionId },

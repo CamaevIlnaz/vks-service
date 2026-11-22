@@ -82,7 +82,8 @@ model AuthSession {
   ipAddress        String?
   userAgent        String?
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user               User                           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conferenceSessions ConferenceParticipantSession[]
 
   @@index([userId, revokedAt, expiresAt])
   @@index([expiresAt])
@@ -164,16 +165,20 @@ model ConferenceParticipant {
 }
 
 /// Подключение участника с конкретного устройства. Активных сессий может быть несколько.
+/// Подключение пользователя привязано к сессии авторизации и закрывается, когда она отозвана или истекла.
 model ConferenceParticipantSession {
   id            String     @id @default(uuid()) @db.Uuid
   participantId String     @db.Uuid
+  authSessionId String?    @db.Uuid
   deviceType    DeviceType
   joinedAt      DateTime   @default(now())
   leftAt        DateTime?
 
   participant ConferenceParticipant @relation(fields: [participantId], references: [id], onDelete: Restrict)
+  authSession AuthSession?          @relation(fields: [authSessionId], references: [id], onDelete: SetNull)
 
   @@index([participantId, leftAt])
+  @@index([authSessionId, leftAt])
 }
 
 /// Сообщение чата конференции. Сохраняется после завершения конференции.

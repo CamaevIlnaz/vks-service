@@ -22,6 +22,25 @@ export async function setupApp(app: NestFastifyApplication): Promise<void> {
     decorateReply: false,
   });
 
+  const publicDir = path.join(process.cwd(), 'public');
+  await mkdir(publicDir, { recursive: true });
+  await app.register(fastifyStatic, {
+    root: publicDir,
+    prefix: '/public/',
+    decorateReply: false,
+    cacheControl: false,
+    setHeaders(reply) {
+      reply.header('Cache-Control', 'no-store');
+    },
+  });
+
+  app
+    .getHttpAdapter()
+    .getInstance()
+    .get('/', (_request, reply) => {
+      void reply.redirect('/public/');
+    });
+
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

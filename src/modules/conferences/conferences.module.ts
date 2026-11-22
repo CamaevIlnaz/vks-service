@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { PrismaModule } from '../../prisma/prisma.module.js';
+import { ConferenceSessionsService } from './conference-sessions.service.js';
 import { ConferencesController } from './conferences.controller.js';
 import { ConferencesScheduler } from './conferences.scheduler.js';
 import { ConferencesService } from './conferences.service.js';
@@ -46,6 +47,8 @@ import { RoomConferencesController } from './room-conferences.controller.js';
     GuestTokensService,
     ConferenceActorGuard,
     ConferencesScheduler,
+    ConferenceSessionsService,
   ],
+  exports: [ConferenceSessionsService],
 })
 export class ConferencesModule {}

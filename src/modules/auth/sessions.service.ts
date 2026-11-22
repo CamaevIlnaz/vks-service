@@ -11,6 +11,7 @@ import {
   UserStatus,
 } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { ConferenceSessionsService } from '../conferences/conference-sessions.service.js';
 import { REFRESH_TOKEN_TTL_SECONDS } from './auth.constants.js';
 import type { ClientMeta } from './auth.types.js';
 import { safeEqual, TokensService } from './tokens.service.js';
@@ -20,6 +21,7 @@ export class SessionsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly tokensService: TokensService,
+    private readonly conferenceSessionsService: ConferenceSessionsService,
   ) {}
 
   async create(
@@ -144,6 +146,10 @@ export class SessionsService {
     if (count === 0) {
       throw new NotFoundException('Сессия не найдена');
     }
+
+    await this.conferenceSessionsService.closeForAuthSessions({
+      id: sessionId,
+    });
   }
 
   async revokeByRefreshToken(refreshToken: string): Promise<void> {
@@ -153,7 +159,7 @@ export class SessionsService {
       return;
     }
 
-    await this.prisma.authSession.updateMany({
+    const { count } = await this.prisma.authSession.updateMany({
       where: {
         id: parsed.sessionId,
         refreshTokenHash: parsed.hash,
@@ -161,6 +167,12 @@ export class SessionsService {
       },
       data: { revokedAt: new Date() },
     });
+
+    if (count > 0) {
+      await this.conferenceSessionsService.closeForAuthSessions({
+        id: parsed.sessionId,
+      });
+    }
   }
 
   async revokeAll(userId: number): Promise<void> {
@@ -168,12 +180,16 @@ export class SessionsService {
       where: { userId, revokedAt: null },
       data: { revokedAt: new Date() },
     });
+    await this.conferenceSessionsService.closeForAuthSessions({ userId });
   }
 
   private async revoke(sessionId: string): Promise<void> {
     await this.prisma.authSession.updateMany({
       where: { id: sessionId, revokedAt: null },
       data: { revokedAt: new Date() },
+    });
+    await this.conferenceSessionsService.closeForAuthSessions({
+      id: sessionId,
     });
   }
 

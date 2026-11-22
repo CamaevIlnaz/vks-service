@@ -4,6 +4,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { JwtModule } from '@nestjs/jwt';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { PrismaModule } from '../../prisma/prisma.module.js';
+import { ConferencesModule } from '../conferences/conferences.module.js';
 import { UsersModule } from '../users/users.module.js';
 import { ACCESS_TOKEN_TTL_SECONDS } from './auth.constants.js';
 import { AuthController } from './auth.controller.js';
@@ -17,6 +18,7 @@ import { TokensService } from './tokens.service.js';
   imports: [
     PrismaModule,
     UsersModule,
+    ConferencesModule,
     ThrottlerModule.forRoot({ throttlers: [{ ttl: 60_000, limit: 30 }] }),
     JwtModule.registerAsync({
       inject: [ConfigService],

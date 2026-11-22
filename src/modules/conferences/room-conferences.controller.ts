@@ -80,7 +80,7 @@ export class RoomConferencesController {
   ): Promise<JoinResponseDto> {
     return this.conferencesService.join(
       slug,
-      user?.id ?? null,
+      user ?? null,
       guestToken,
       dto,
       userAgent,

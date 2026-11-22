@@ -12,6 +12,7 @@ import {
   lockRoom,
   UNFINISHED_CONFERENCE_STATUSES,
 } from './conference-lifecycle.js';
+import { ConferenceSessionsService } from './conference-sessions.service.js';
 
 const BATCH_SIZE = 100;
 
@@ -20,7 +21,10 @@ export class ConferencesScheduler {
   private readonly logger = new Logger(ConferencesScheduler.name);
   private running = false;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly conferenceSessionsService: ConferenceSessionsService,
+  ) {}
 
   @Cron(CronExpression.EVERY_30_SECONDS)
   async handleTick(): Promise<void> {
@@ -30,6 +34,7 @@ export class ConferencesScheduler {
 
     this.running = true;
     try {
+      await this.conferenceSessionsService.closeUnauthorized();
       await this.finishEmptyConferences();
       await this.expireTemporaryRooms();
     } catch (error) {
