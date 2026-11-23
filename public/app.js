@@ -807,6 +807,373 @@ function wsErrorText(error) {
   return message || 'Ошибка соединения';
 }
 
+function deviceErrorText(error, label) {
+  if (
+    label === 'экран' &&
+    (error?.name === 'NotAllowedError' || error?.name === 'AbortError')
+  ) {
+    return 'Показ экрана отменён';
+  }
+  if (/not supported/i.test(error?.message || '')) {
+    return label === 'экран'
+      ? 'Этот браузер не поддерживает показ экрана'
+      : `Этот браузер не поддерживает: ${label}`;
+  }
+  if (
+    error?.name === 'NotAllowedError' ||
+    error?.name === 'PermissionDeniedError'
+  ) {
+    return `Браузер не дал доступ: ${label}`;
+  }
+  return error?.message || `Не удалось переключить ${label}`;
+}
+
+function mediaTrack(participant, source) {
+  const publication = participant.getTrackPublication(source);
+  if (!publication || publication.isMuted || !publication.track) return null;
+  return publication.track;
+}
+
+function collectMediaTiles(room) {
+  const source = LivekitClient.Track.Source;
+  const participants = [
+    room.localParticipant,
+    ...room.remoteParticipants.values(),
+  ];
+  const tiles = [];
+
+  for (const participant of participants) {
+    const isLocal = participant === room.localParticipant;
+    const name = participant.name || (isLocal ? 'Вы' : 'Участник');
+    tiles.push({
+      id: `${participant.identity}:camera`,
+      name,
+      isLocal,
+      isScreen: false,
+      micOff: !participant.isMicrophoneEnabled,
+      video: mediaTrack(participant, source.Camera),
+      audio: isLocal ? null : mediaTrack(participant, source.Microphone),
+    });
+
+    const screen = mediaTrack(participant, source.ScreenShare);
+    const screenAudio = isLocal
+      ? null
+      : mediaTrack(participant, source.ScreenShareAudio);
+    if (screen || screenAudio) {
+      tiles.push({
+        id: `${participant.identity}:screen`,
+        name,
+        isLocal,
+        isScreen: true,
+        micOff: false,
+        video: screen,
+        audio: screenAudio,
+      });
+    }
+  }
+
+  return tiles.sort((left, right) => Number(right.isScreen) - Number(left.isScreen));
+}
+
+function CameraView({ track, mirror, contain }) {
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element || !track) return undefined;
+    track.attach(element);
+    return () => {
+      track.detach(element);
+    };
+  }, [track]);
+
+  const className = [mirror ? 'mirror' : '', contain ? 'contain' : '']
+    .filter(Boolean)
+    .join(' ');
+
+  return html`<video
+    ref=${ref}
+    className=${className}
+    autoPlay=${true}
+    playsInline=${true}
+    muted=${true}
+  ></video>`;
+}
+
+function RemoteAudio({ track }) {
+  const ref = useRef(null);
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element || !track) return undefined;
+    track.attach(element);
+    return () => {
+      track.detach(element);
+    };
+  }, [track]);
+
+  return html`<audio ref=${ref} autoPlay=${true}></audio>`;
+}
+
+function MediaStage({
+  sessionId,
+  enabled,
+  ended,
+  accessTokenRef,
+  guestTokenRef,
+  onUnauthorized,
+}) {
+  const [status, setStatus] = useState('idle');
+  const [mediaError, setMediaError] = useState('');
+  const [deviceError, setDeviceError] = useState('');
+  const [tiles, setTiles] = useState([]);
+  const [micOn, setMicOn] = useState(false);
+  const [camOn, setCamOn] = useState(false);
+  const [screenOn, setScreenOn] = useState(false);
+  const [micPending, setMicPending] = useState(false);
+  const [camPending, setCamPending] = useState(false);
+  const [screenPending, setScreenPending] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const roomRef = useRef(null);
+  const onUnauthorizedRef = useRef(onUnauthorized);
+  onUnauthorizedRef.current = onUnauthorized;
+
+  function refresh(room) {
+    setMicOn(room.localParticipant.isMicrophoneEnabled);
+    setCamOn(room.localParticipant.isCameraEnabled);
+    setScreenOn(room.localParticipant.isScreenShareEnabled);
+    setTiles(collectMediaTiles(room));
+  }
+
+  useEffect(() => {
+    if (!enabled || !sessionId) {
+      setStatus('idle');
+      setMediaError('');
+      setDeviceError('');
+      setTiles([]);
+      setMicOn(false);
+      setCamOn(false);
+      setScreenOn(false);
+      return undefined;
+    }
+
+    if (typeof LivekitClient === 'undefined') {
+      setStatus('error');
+      setMediaError('Не загружен клиент LiveKit');
+      return undefined;
+    }
+
+    if (!LivekitClient.isBrowserSupported()) {
+      setStatus('error');
+      setMediaError('Этот браузер не поддерживает видеозвонок');
+      return undefined;
+    }
+
+    let cancelled = false;
+    const room = new LivekitClient.Room({
+      adaptiveStream: true,
+      dynacast: true,
+    });
+    roomRef.current = room;
+
+    const sync = () => {
+      if (!cancelled) refresh(room);
+    };
+    const { RoomEvent } = LivekitClient;
+    const roomEvents = [
+      RoomEvent.ParticipantConnected,
+      RoomEvent.ParticipantDisconnected,
+      RoomEvent.TrackSubscribed,
+      RoomEvent.TrackUnsubscribed,
+      RoomEvent.TrackMuted,
+      RoomEvent.TrackUnmuted,
+      RoomEvent.TrackPublished,
+      RoomEvent.TrackUnpublished,
+      RoomEvent.LocalTrackPublished,
+      RoomEvent.LocalTrackUnpublished,
+      RoomEvent.ParticipantNameChanged,
+    ];
+    for (const eventName of roomEvents) room.on(eventName, sync);
+
+    const onPageHide = () => {
+      void room.disconnect();
+    };
+    window.addEventListener('pagehide', onPageHide);
+    setStatus('connecting');
+    setMediaError('');
+    setDeviceError('');
+
+    void (async () => {
+      try {
+        const data = await request('/media/token', {
+          method: 'POST',
+          body: { sessionId },
+          token: accessTokenRef.current || undefined,
+          guestToken: accessTokenRef.current
+            ? undefined
+            : guestTokenRef.current || undefined,
+        });
+        if (cancelled) return;
+        await room.connect(data.url, data.token);
+        if (cancelled) {
+          await room.disconnect();
+          return;
+        }
+        setStatus('connected');
+        sync();
+      } catch (error) {
+        if (cancelled) return;
+        if (error?.status === 401) onUnauthorizedRef.current();
+        setStatus('error');
+        setMediaError(error?.message || 'Не удалось подключить видео');
+        setTiles([]);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener('pagehide', onPageHide);
+      for (const eventName of roomEvents) room.off(eventName, sync);
+      void room.disconnect();
+      if (roomRef.current === room) roomRef.current = null;
+    };
+  }, [enabled, sessionId, attempt]);
+
+  async function toggleDevice(kind) {
+    const room = roomRef.current;
+    if (!room || status !== 'connected') return;
+    const pending =
+      kind === 'mic' ? micPending : kind === 'cam' ? camPending : screenPending;
+    if (pending) return;
+    const setPending =
+      kind === 'mic'
+        ? setMicPending
+        : kind === 'cam'
+          ? setCamPending
+          : setScreenPending;
+    const label =
+      kind === 'mic' ? 'микрофон' : kind === 'cam' ? 'видео' : 'экран';
+    setPending(true);
+    setDeviceError('');
+    const enabledNow =
+      kind === 'mic'
+        ? room.localParticipant.isMicrophoneEnabled
+        : kind === 'cam'
+          ? room.localParticipant.isCameraEnabled
+          : room.localParticipant.isScreenShareEnabled;
+    const unlockAudio = room.startAudio();
+    const changeDevice =
+      kind === 'mic'
+        ? room.localParticipant.setMicrophoneEnabled(!enabledNow)
+        : kind === 'cam'
+          ? room.localParticipant.setCameraEnabled(!enabledNow)
+          : room.localParticipant.setScreenShareEnabled(!enabledNow, {
+              audio: true,
+            });
+    try {
+      await unlockAudio;
+      await changeDevice;
+      refresh(room);
+    } catch (error) {
+      setDeviceError(deviceErrorText(error, label));
+      refresh(room);
+    } finally {
+      setPending(false);
+    }
+  }
+
+  const controlsReady = status === 'connected';
+  const hasScreen = tiles.some((tile) => tile.isScreen);
+  const cameraCount = tiles.filter((tile) => !tile.isScreen).length;
+  let statusText = 'Подключение к конференции…';
+  if (ended) statusText = 'Конференция завершена';
+  else if (status === 'connecting') statusText = 'Подключение к видео…';
+  else if (status === 'connected') statusText = 'Видео подключено';
+  else if (status === 'error') statusText = 'Видео не подключено';
+
+  return html`<section className="stage">
+    <div className="stage-videos">
+      ${tiles.length === 0
+        ? html`<p className="stage-wait">${statusText}</p>`
+        : tiles.map(
+            (tile) => html`<div
+              key=${tile.id}
+              className=${`tile${tile.isScreen ? ' tile-screen' : ''}${!tile.isScreen && cameraCount === 1 && !hasScreen ? ' tile-solo' : ''}`}
+            >
+              ${tile.video
+                ? html`<${CameraView}
+                    track=${tile.video}
+                    mirror=${tile.isLocal && !tile.isScreen}
+                    contain=${tile.isScreen}
+                  />`
+                : html`<div className="tile-placeholder">
+                    ${tile.isScreen ? 'Экран' : tile.name}
+                  </div>`}
+              <span className="tile-name">
+                ${tile.isScreen
+                  ? `${tile.name} · экран${tile.isLocal ? ' · вы' : ''}`
+                  : tile.isLocal
+                    ? `${tile.name} · вы`
+                    : tile.name}${!tile.isScreen && !tile.isLocal && tile.micOff
+                  ? ' · без микрофона'
+                  : ''}
+              </span>
+            </div>`,
+          )}
+    </div>
+    <div className="media-audio">
+      ${tiles.map((tile) =>
+        tile.audio
+          ? html`<${RemoteAudio} key=${tile.id} track=${tile.audio} />`
+          : null,
+      )}
+    </div>
+    <div className="stage-controls">
+      <button
+        type="button"
+        className=${micOn ? 'control' : 'control off'}
+        aria-pressed=${micOn}
+        disabled=${!controlsReady || micPending}
+        onClick=${() => toggleDevice('mic')}
+      >
+        ${micOn ? 'Выключить микрофон' : 'Включить микрофон'}
+      </button>
+      <button
+        type="button"
+        className=${camOn ? 'control' : 'control off'}
+        aria-pressed=${camOn}
+        disabled=${!controlsReady || camPending}
+        onClick=${() => toggleDevice('cam')}
+      >
+        ${camOn ? 'Выключить видео' : 'Включить видео'}
+      </button>
+      <button
+        type="button"
+        className=${screenOn ? 'control' : 'control off'}
+        aria-pressed=${screenOn}
+        disabled=${!controlsReady || screenPending}
+        onClick=${() => toggleDevice('screen')}
+      >
+        ${screenOn ? 'Остановить экран' : 'Показать экран'}
+      </button>
+      ${status === 'error' && enabled
+        ? html`<button
+            type="button"
+            className="ghost"
+            onClick=${() => setAttempt((value) => value + 1)}
+          >
+            Повторить
+          </button>`
+        : null}
+    </div>
+    ${tiles.length > 0
+      ? html`<p className="stage-status">${statusText}</p>`
+      : null}
+    <${ErrorText}>${mediaError}</${ErrorText}>
+    <${ErrorText}>${deviceError}</${ErrorText}>
+  </section>`;
+}
+
 function CallScreen({ auth, call, onLeave, onUpdate, onLogout, onUnauthorized }) {
   const [participants, setParticipants] = useState([]);
   const [messages, setMessages] = useState([]);
@@ -825,6 +1192,7 @@ function CallScreen({ auth, call, onLeave, onUpdate, onLogout, onUnauthorized })
     call.participantId || null,
   );
   const [sessionId, setSessionId] = useState(call.sessionId || null);
+  const [liveSessionId, setLiveSessionId] = useState(null);
   const listRef = useRef(null);
   const socketRef = useRef(null);
   const leavingRef = useRef(false);
@@ -863,6 +1231,7 @@ function CallScreen({ auth, call, onLeave, onUpdate, onLogout, onUnauthorized })
     }
 
     let disposed = false;
+    setLiveSessionId(null);
     const knownMessageIds = new Set();
     const socket = io(`${location.origin}/conferences`, {
       transports: ['websocket'],
@@ -938,6 +1307,7 @@ function CallScreen({ auth, call, onLeave, onUpdate, onLogout, onUnauthorized })
         guestTokenRef.current = response.guestToken || guestTokenRef.current;
         if (response.guestToken) writeGuestToken(slug, response.guestToken);
         setSessionId(response.sessionId);
+        setLiveSessionId(response.sessionId);
         setMyParticipantId(response.participantId);
         setConferenceStatus(response.conferenceStatus);
         setJoined(true);
@@ -1059,6 +1429,7 @@ function CallScreen({ auth, call, onLeave, onUpdate, onLogout, onUnauthorized })
   function leave() {
     leavingRef.current = true;
     setLeaving(true);
+    setLiveSessionId(null);
     setError('');
     const socket = socketRef.current;
     const finish = () => {
@@ -1073,8 +1444,10 @@ function CallScreen({ auth, call, onLeave, onUpdate, onLogout, onUnauthorized })
   }
 
   const ordered = [...messages].reverse();
+  const mediaEnabled =
+    Boolean(liveSessionId) && conferenceStatus === 'ACTIVE';
 
-  return html`<main className="page">
+  return html`<main className="page call-page">
     <${Topbar}
       title=${call.room.name}
       user=${auth?.user || { name: call.guestName || 'Гость', email: 'гость' }}
@@ -1145,6 +1518,16 @@ function CallScreen({ auth, call, onLeave, onUpdate, onLogout, onUnauthorized })
             </ul>`}
       </section>
 
+      <${MediaStage}
+        sessionId=${liveSessionId}
+        enabled=${mediaEnabled}
+        ended=${conferenceStatus === 'ENDED' && Boolean(liveSessionId)}
+        accessTokenRef=${accessTokenRef}
+        guestTokenRef=${guestTokenRef}
+        onUnauthorized=${onUnauthorized}
+      />
+
+      <div className="chat-column">
       <section className="panel messages">
         <h2>
           Сообщения <span className="count">${messageTotal}</span>
@@ -1196,6 +1579,7 @@ function CallScreen({ auth, call, onLeave, onUpdate, onLogout, onUnauthorized })
           ${sending ? 'Отправка…' : 'Отправить'}
         </button>
       </form>
+      </div>
     </div>
   </main>`;
 }
