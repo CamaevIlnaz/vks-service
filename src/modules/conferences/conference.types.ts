@@ -9,3 +9,12 @@ export type ConferenceActorRequest = FastifyRequest & {
   user?: AuthUser;
   actor: ConferenceActor;
 };
+
+export function isActorParticipant(
+  actor: ConferenceActor,
+  participant: { userId: number | null; guestId: string | null },
+): boolean {
+  return actor.kind === 'user'
+    ? participant.userId === actor.userId
+    : participant.guestId === actor.guestId;
+}

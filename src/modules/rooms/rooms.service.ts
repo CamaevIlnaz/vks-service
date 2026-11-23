@@ -229,7 +229,7 @@ export class RoomsService {
       );
 
       if (finishedConferenceId) {
-        this.events.conferenceEnded(finishedConferenceId, now);
+        await this.events.conferenceEnded(finishedConferenceId, now);
       }
     });
   }

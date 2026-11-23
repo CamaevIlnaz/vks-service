@@ -99,6 +99,7 @@ beforeAll(async () => {
 
   app = moduleRef.createNestApplication<NestFastifyApplication>(
     new FastifyAdapter(),
+    { rawBody: true },
   );
   await setupApp(app);
   await app.init();

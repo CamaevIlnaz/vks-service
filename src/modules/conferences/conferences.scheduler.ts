@@ -87,7 +87,7 @@ export class ConferencesScheduler {
             });
 
             if (finished) {
-              this.events.conferenceEnded(candidate.id, endedAt);
+              await this.events.conferenceEnded(candidate.id, endedAt);
             }
 
             return finished;

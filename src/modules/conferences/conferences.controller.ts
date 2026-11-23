@@ -17,6 +17,7 @@ import {
   ApiOperation,
   ApiParam,
   ApiSecurity,
+  ApiServiceUnavailableResponse,
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
@@ -29,7 +30,9 @@ import { ConferencesService } from './conferences.service.js';
 import { CurrentActor } from './decorators/current-actor.decorator.js';
 import { ConferenceDto } from './dto/conference.dto.js';
 import { LeaveResponseDto } from './dto/leave-response.dto.js';
+import { MutedMicrophoneDto } from './dto/mute-microphone.dto.js';
 import { ParticipantListDto } from './dto/participant.dto.js';
+import { ParticipantRemovedDto } from './dto/remove-participant.dto.js';
 import { ConferenceActorGuard } from './guards/conference-actor.guard.js';
 
 const UNAUTHORIZED_ACTOR =
@@ -93,7 +96,7 @@ export class ConferencesController {
   @ApiOperation({
     summary: 'Завершить конференцию',
     description:
-      'Только для организатора (владельца комнаты). Закрывает все подключения; временная комната тоже завершается. Повторный вызов безопасен.',
+      'Только для организатора (владельца комнаты). Закрывает все подключения, удаляет медиакомнату LiveKit и рассылает conference:ended. Временная комната тоже завершается. Если LiveKit недоступен, конференция всё равно завершается. Повторный вызов безопасен.',
   })
   @ApiParam({ name: 'id', format: 'uuid', description: 'id конференции' })
   @ApiOkResponse({ type: ConferenceDto })
@@ -107,6 +110,103 @@ export class ConferencesController {
     @Param('id', new ParseUUIDPipe()) id: string,
   ): Promise<ConferenceDto> {
     return this.conferencesService.end(id, user.id);
+  }
+
+  @Post(':id/participants/:participantId/remove')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Удалить участника из конференции',
+    description:
+      'Для владельца комнаты, HOST и MODERATOR. Сначала закрываются подключения участника в приложении, затем отключаются его медиасоединения LiveKit. Остальные участники не затрагиваются. История участника сохраняется. removeParticipant не отзывает уже выданный JWT до конца его короткого срока.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid', description: 'id конференции' })
+  @ApiParam({
+    name: 'participantId',
+    format: 'uuid',
+    description: 'id участника',
+  })
+  @ApiOkResponse({ type: ParticipantRemovedDto })
+  @ApiNotFoundResponse({ description: 'Участник или конференция не найдены' })
+  @ApiForbiddenResponse({
+    description:
+      'Недостаточно прав, конференция не активна или цель — организатор',
+  })
+  @ApiUnauthorizedResponse({
+    description: 'Нет или недействителен access token',
+  })
+  removeParticipant(
+    @CurrentUser() user: AuthUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('participantId', new ParseUUIDPipe()) participantId: string,
+  ): Promise<ParticipantRemovedDto> {
+    return this.conferencesService.removeParticipant(
+      id,
+      participantId,
+      user.id,
+    );
+  }
+
+  @Post(':id/sessions/:sessionId/disconnect')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Отключить одно устройство участника',
+    description:
+      'Для владельца комнаты, HOST и MODERATOR. Закрывает только указанное подключение и его медиасоединение. Другие устройства того же пользователя остаются в конференции.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid', description: 'id конференции' })
+  @ApiParam({
+    name: 'sessionId',
+    format: 'uuid',
+    description: 'id подключения устройства',
+  })
+  @ApiOkResponse({ type: LeaveResponseDto })
+  @ApiNotFoundResponse({ description: 'Подключение не найдено в конференции' })
+  @ApiForbiddenResponse({
+    description: 'Недостаточно прав или конференция не активна',
+  })
+  @ApiUnauthorizedResponse({
+    description: 'Нет или недействителен access token',
+  })
+  disconnectSession(
+    @CurrentUser() user: AuthUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('sessionId', new ParseUUIDPipe()) sessionId: string,
+  ): Promise<LeaveResponseDto> {
+    return this.conferencesService.disconnectSession(id, sessionId, user.id);
+  }
+
+  @Post(':id/sessions/:sessionId/microphone/mute')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Отключить микрофон устройства',
+    description:
+      'Для владельца комнаты, HOST и MODERATOR. Глушит микрофон одного LiveKit identity и запрещает его в следующих токенах этой сессии. Камера и демонстрация экрана сохраняются. Другие устройства участника не затрагиваются.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid', description: 'id конференции' })
+  @ApiParam({
+    name: 'sessionId',
+    format: 'uuid',
+    description: 'id подключения устройства',
+  })
+  @ApiOkResponse({ type: MutedMicrophoneDto })
+  @ApiNotFoundResponse({ description: 'Подключение не найдено в конференции' })
+  @ApiForbiddenResponse({
+    description:
+      'Недостаточно прав, подключение закрыто или конференция не активна',
+  })
+  @ApiServiceUnavailableResponse({
+    description:
+      'Запрет сохранён для следующих токенов, но LiveKit не подтвердил mute текущего соединения',
+  })
+  @ApiUnauthorizedResponse({
+    description: 'Нет или недействителен access token',
+  })
+  muteMicrophone(
+    @CurrentUser() user: AuthUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('sessionId', new ParseUUIDPipe()) sessionId: string,
+  ): Promise<MutedMicrophoneDto> {
+    return this.conferencesService.muteMicrophone(id, sessionId, user.id);
   }
 
   @OptionalAuth()

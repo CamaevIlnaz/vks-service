@@ -1,5 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
 import type { Namespace, Socket } from 'socket.io';
+import { MediaService } from '../media/media.service.js';
 import {
   Conference,
   ConferenceStatus,
@@ -46,6 +47,8 @@ export class ConferenceEventsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly presence: ConferencePresenceService,
+    @Inject(forwardRef(() => MediaService))
+    private readonly media: MediaService,
   ) {}
 
   bindServer(server: Namespace): void {
@@ -142,6 +145,8 @@ export class ConferenceEventsService {
     if (options.emptied) {
       this.conferenceUpdated(options.emptied);
     }
+
+    await this.media.onSessionsClosed(conferenceId, sessionIds);
   }
 
   conferenceUpdated(conference: Conference): void {
@@ -155,9 +160,10 @@ export class ConferenceEventsService {
       });
   }
 
-  conferenceEnded(conferenceId: string, endedAt: Date): void {
+  async conferenceEnded(conferenceId: string, endedAt: Date): Promise<void> {
     const room = conferenceRoom(conferenceId);
 
+    await this.media.onConferenceEnded(conferenceId);
     this.presence.removeConference(conferenceId);
     this.server?.to(room).emit(CONFERENCE_EVENTS.ended, {
       conferenceId,

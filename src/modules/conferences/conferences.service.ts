@@ -1,6 +1,8 @@
 import {
   BadRequestException,
   ForbiddenException,
+  forwardRef,
+  Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -27,7 +29,13 @@ import {
 } from './conference-lifecycle.js';
 import { ConferenceEventsService } from './conference-events.service.js';
 import { ConferencePresenceService } from './conference-presence.service.js';
-import type { ConferenceActor } from './conference.types.js';
+import {
+  isActorParticipant,
+  type ConferenceActor,
+} from './conference.types.js';
+import { MutedMicrophoneDto } from './dto/mute-microphone.dto.js';
+import { ParticipantRemovedDto } from './dto/remove-participant.dto.js';
+import { MediaService } from '../media/media.service.js';
 import {
   ConferenceDto,
   ConferenceListDto,
@@ -81,6 +89,8 @@ export class ConferencesService {
     private readonly guestTokensService: GuestTokensService,
     private readonly presence: ConferencePresenceService,
     private readonly events: ConferenceEventsService,
+    @Inject(forwardRef(() => MediaService))
+    private readonly media: MediaService,
   ) {}
 
   /**
@@ -352,7 +362,7 @@ export class ConferencesService {
       });
 
       if (finished) {
-        this.events.conferenceEnded(conferenceId, now);
+        await this.events.conferenceEnded(conferenceId, now);
       }
     });
 
@@ -509,6 +519,157 @@ export class ConferencesService {
     return { conference, participant, isOrganizer };
   }
 
+  /**
+   * Отзывает доступ участника: закрывает все его подключения, затем отключает медиа.
+   * Запись участника остаётся в истории. Повторный вызов безопасен.
+   */
+  async removeParticipant(
+    conferenceId: string,
+    participantId: string,
+    userId: number,
+  ): Promise<ParticipantRemovedDto> {
+    const access = await this.getAccess(conferenceId, {
+      kind: 'user',
+      userId,
+    });
+    this.assertConferenceOpen(access);
+
+    const target = await this.prisma.conferenceParticipant.findFirst({
+      where: { id: participantId, conferenceId },
+    });
+
+    if (!target) {
+      throw new NotFoundException('Участник не найден');
+    }
+
+    this.assertCanAffect(access, target);
+
+    if (access.participant?.id === target.id) {
+      throw new ForbiddenException('Чтобы выйти, закройте своё подключение');
+    }
+
+    if (
+      target.userId !== null &&
+      target.userId === access.conference.room.ownerId
+    ) {
+      throw new ForbiddenException('Нельзя удалить организатора');
+    }
+
+    const roomId = access.conference.roomId;
+
+    return this.presence.withRoomLock(roomId, async () => {
+      const closed = await this.prisma.$transaction(async (tx) => {
+        await lockRoom(tx, roomId);
+        const open = await tx.conferenceParticipantSession.findMany({
+          where: {
+            participantId,
+            leftAt: null,
+            participant: { conferenceId },
+          },
+          select: { id: true },
+        });
+        const ids = open.map((session) => session.id);
+        const result = await closeSessions(tx, conferenceId, ids, new Date());
+
+        return { ids, result };
+      });
+
+      await this.events.sessionsClosed(conferenceId, closed.ids, {
+        emptied: closed.result.emptied ? closed.result.conference : null,
+      });
+      await this.media.disconnectParticipant(conferenceId, participantId);
+
+      return {
+        participantId,
+        closedSessionIds: closed.ids,
+        conferenceStatus: closed.result.conference.status,
+      };
+    });
+  }
+
+  /** Закрывает одно устройство. Остальные подключения того же участника не трогает. */
+  async disconnectSession(
+    conferenceId: string,
+    sessionId: string,
+    userId: number,
+  ): Promise<LeaveResponseDto> {
+    const access = await this.getAccess(conferenceId, {
+      kind: 'user',
+      userId,
+    });
+    const session = await this.prisma.conferenceParticipantSession.findUnique({
+      where: { id: sessionId },
+      include: { participant: { include: { conference: true } } },
+    });
+
+    if (!session || session.participant.conferenceId !== conferenceId) {
+      throw new NotFoundException('Подключение не найдено');
+    }
+
+    this.assertCanAffect(access, session.participant);
+    this.assertConferenceOpen(access);
+
+    if (session.leftAt) {
+      await this.media.onSessionsClosed(conferenceId, [sessionId]);
+
+      return {
+        sessionId,
+        leftAt: session.leftAt,
+        conferenceId,
+        conferenceStatus: session.participant.conference.status,
+      };
+    }
+
+    const conference = await this.closeSession(
+      access.conference.roomId,
+      conferenceId,
+      sessionId,
+    );
+    const updated =
+      await this.prisma.conferenceParticipantSession.findUniqueOrThrow({
+        where: { id: sessionId },
+      });
+
+    return {
+      sessionId,
+      leftAt: updated.leftAt!,
+      conferenceId,
+      conferenceStatus: conference.status,
+    };
+  }
+
+  /** Запрещает микрофон одного устройства. Следующий медиатокен этой сессии его не включает. */
+  async muteMicrophone(
+    conferenceId: string,
+    sessionId: string,
+    userId: number,
+  ): Promise<MutedMicrophoneDto> {
+    const access = await this.getAccess(conferenceId, {
+      kind: 'user',
+      userId,
+    });
+    this.assertConferenceOpen(access);
+
+    const session = await this.prisma.conferenceParticipantSession.findUnique({
+      where: { id: sessionId },
+      include: { participant: true },
+    });
+
+    if (!session || session.participant.conferenceId !== conferenceId) {
+      throw new NotFoundException('Подключение не найдено');
+    }
+
+    this.assertCanAffect(access, session.participant);
+
+    if (session.leftAt) {
+      throw new ForbiddenException('Подключение уже закрыто');
+    }
+
+    await this.media.muteMicrophone(conferenceId, sessionId);
+
+    return { sessionId, microphoneMuted: true };
+  }
+
   /** Вызывается под блокировкой комнаты, поэтому дубликат участника не создаётся. */
   private async findOrCreateParticipant(
     tx: Prisma.TransactionClient,
@@ -560,13 +721,50 @@ export class ConferencesService {
       data: { guestName: identity.guestName },
     });
   }
-}
 
-function isActorParticipant(
-  actor: ConferenceActor,
-  participant: ConferenceParticipant,
-): boolean {
-  return actor.kind === 'user'
-    ? participant.userId === actor.userId
-    : participant.guestId === actor.guestId;
+  /**
+   * Организатор комнаты, HOST и MODERATOR. Роль берётся из участника конференции,
+   * владелец комнаты считается организатором даже до входа.
+   */
+  private assertModerator(access: ConferenceAccess): void {
+    const role = access.participant?.role;
+    const canModerate =
+      access.isOrganizer ||
+      role === ConferenceParticipantRole.HOST ||
+      role === ConferenceParticipantRole.MODERATOR;
+
+    if (!canModerate) {
+      throw new ForbiddenException(
+        'Действие доступно только организатору или модератору',
+      );
+    }
+  }
+
+  private assertCanAffect(
+    access: ConferenceAccess,
+    target: ConferenceParticipant,
+  ): void {
+    this.assertModerator(access);
+
+    const targetIsOwner =
+      target.userId !== null &&
+      target.userId === access.conference.room.ownerId;
+
+    if (
+      (targetIsOwner || target.role === ConferenceParticipantRole.HOST) &&
+      !access.isOrganizer
+    ) {
+      throw new ForbiddenException('Нельзя изменить подключение организатора');
+    }
+  }
+
+  private assertConferenceOpen(access: ConferenceAccess): void {
+    if (access.conference.status === ConferenceStatus.ENDED) {
+      throw new ForbiddenException('Конференция завершена');
+    }
+
+    if (access.conference.status !== ConferenceStatus.ACTIVE) {
+      throw new ForbiddenException('Конференция не активна');
+    }
+  }
 }

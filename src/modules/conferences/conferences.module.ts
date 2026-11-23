@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { PrismaModule } from '../../prisma/prisma.module.js';
 import { AuthModule } from '../auth/auth.module.js';
+import { MediaModule } from '../media/media.module.js';
 import { ConferenceEventsService } from './conference-events.service.js';
 import { ConferencePresenceService } from './conference-presence.service.js';
 import { ConferenceSessionsService } from './conference-sessions.service.js';
@@ -23,6 +24,7 @@ import { RoomConferencesController } from './room-conferences.controller.js';
 @Module({
   imports: [
     PrismaModule,
+    forwardRef(() => MediaModule),
     // AuthModule закрывает подключения через ConferenceSessionsService, а гейтвей проверяет токены через SessionsService.
     forwardRef(() => AuthModule),
     // Отдельный секрет и audience: гостевой токен нельзя выдать за access token и наоборот.
@@ -59,6 +61,9 @@ import { RoomConferencesController } from './room-conferences.controller.js';
     ConferencesGateway,
   ],
   exports: [
+    ConferencesService,
+    ConferenceActorGuard,
+    GuestTokensService,
     ConferenceSessionsService,
     ConferencePresenceService,
     ConferenceEventsService,

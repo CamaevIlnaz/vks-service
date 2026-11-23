@@ -203,6 +203,7 @@ beforeAll(async () => {
 
   app = moduleRef.createNestApplication<NestFastifyApplication>(
     new FastifyAdapter(),
+    { rawBody: true },
   );
   await setupApp(app);
   await app.listen(0, '127.0.0.1');

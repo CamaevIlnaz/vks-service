@@ -1,0 +1,30 @@
+# Пример локального LiveKit Server.
+# Ключи должны совпадать с LIVEKIT_API_KEY и LIVEKIT_API_SECRET бэкенда.
+#
+# Webhook вызывается процессом LiveKit, поэтому адрес — это адрес NestJS
+# с точки зрения этого процесса, а не браузера.
+#
+# Сейчас LiveKit запущен на хосте (порт 7880 отвечает с 127.0.0.1 и это не контейнер),
+# поэтому бэкенд на том же хосте доступен как 127.0.0.1.
+# API_PREFIX по умолчанию — api.
+#
+# Если LiveKit перенести в Docker, а NestJS оставить на хосте, localhost внутри
+# контейнера укажет на сам контейнер. Тогда замените URL на:
+#   http://host.docker.internal:3000/api/media/livekit/webhook
+# Если оба сервиса в одной docker-сети — на имя сервиса бэкенда, не на localhost.
+
+port: 7880
+
+rtc:
+  tcp_port: 7881
+  port_range_start: 50000
+  port_range_end: 60000
+  use_external_ip: false
+
+keys:
+  devkey: secret
+
+webhook:
+  api_key: devkey
+  urls:
+    - http://127.0.0.1:3000/api/media/livekit/webhook

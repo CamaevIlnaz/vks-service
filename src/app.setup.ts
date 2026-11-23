@@ -7,6 +7,7 @@ import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { SocketIoAdapter } from './common/socket-io.adapter.js';
+import { LIVEKIT_WEBHOOK_CONTENT_TYPE } from './modules/media/media.constants.js';
 import { AVATAR_MAX_BYTES } from './modules/users/avatar-file.js';
 
 export async function setupApp(app: NestFastifyApplication): Promise<void> {
@@ -49,6 +50,35 @@ export async function setupApp(app: NestFastifyApplication): Promise<void> {
       transform: true,
     }),
   );
+
+  // LiveKit подписывает сырые байты тела. Повторно собранный JSON подпись не пройдёт.
+  app.useBodyParser(
+    LIVEKIT_WEBHOOK_CONTENT_TYPE,
+    { bodyLimit: 1_048_576 },
+    (_request, body, done) => {
+      try {
+        done(null, JSON.parse(body.toString('utf8')));
+      } catch {
+        const error = new Error('Некорректное тело webhook') as Error & {
+          statusCode: number;
+        };
+        error.statusCode = 400;
+        done(error, undefined);
+      }
+    },
+  );
+  app
+    .getHttpAdapter()
+    .getInstance()
+    .addHook('preHandler', (request, _reply, done) => {
+      const rawBody = (request.raw as { rawBody?: Buffer }).rawBody;
+
+      if (rawBody) {
+        (request as { rawBody?: Buffer }).rawBody = rawBody;
+      }
+
+      done();
+    });
 
   const configService = app.get(ConfigService);
 

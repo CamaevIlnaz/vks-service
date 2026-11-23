@@ -81,6 +81,10 @@ export class ConferencePresenceService {
     return socketIds;
   }
 
+  isSessionConnected(sessionId: string): boolean {
+    return this.socketsBySession.has(sessionId);
+  }
+
   socketIdsBySessions(sessionIds: string[]): string[] {
     return sessionIds
       .map((sessionId) => this.socketsBySession.get(sessionId))
