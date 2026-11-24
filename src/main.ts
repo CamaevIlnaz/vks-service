@@ -29,6 +29,9 @@ async function bootstrap(): Promise<void> {
 
   const swaggerConfig = new DocumentBuilder()
     .setTitle('VKS Service')
+    .setDescription(
+      'События конференции — Socket.IO, namespace `/conferences`: [WebSocket](/websocket-docs/).',
+    )
     .setVersion('1.0')
     .addBearerAuth()
     .addCookieAuth(REFRESH_TOKEN_COOKIE)

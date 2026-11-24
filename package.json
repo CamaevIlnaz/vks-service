@@ -48,6 +48,7 @@
     "fastify": "5.12.8",
     "livekit-client": "2.20.1",
     "livekit-server-sdk": "^2.20.1",
+    "marked": "18.3.0",
     "pg": "8.23.1",
     "prettier": "^3.10.1",
     "reflect-metadata": "0.2.2",

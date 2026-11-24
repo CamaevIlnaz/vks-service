@@ -9,6 +9,7 @@ import path from 'node:path';
 import { SocketIoAdapter } from './common/socket-io.adapter.js';
 import { LIVEKIT_WEBHOOK_CONTENT_TYPE } from './modules/media/media.constants.js';
 import { AVATAR_MAX_BYTES } from './modules/users/avatar-file.js';
+import { registerWebsocketDocs } from './websocket-docs.js';
 
 export async function setupApp(app: NestFastifyApplication): Promise<void> {
   const uploadsDir = path.join(process.cwd(), 'uploads');
@@ -82,6 +83,10 @@ export async function setupApp(app: NestFastifyApplication): Promise<void> {
 
   const configService = app.get(ConfigService);
 
+  registerWebsocketDocs(
+    app,
+    configService.getOrThrow<string>('app.swaggerPath'),
+  );
   app.setGlobalPrefix(configService.getOrThrow<string>('app.apiPrefix'));
   app.useWebSocketAdapter(
     new SocketIoAdapter(
