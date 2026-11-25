@@ -6,7 +6,6 @@ import path from 'node:path';
 import { Marked } from 'marked';
 
 const logger = new Logger('WebsocketDocs');
-const DOC_PATH = path.join(process.cwd(), 'docs', 'websocket.md');
 
 const markdown = new Marked({
   gfm: true,
@@ -17,47 +16,90 @@ const markdown = new Marked({
   },
 });
 
+interface DocPage {
+  route: string;
+  file: string;
+  title: string;
+  navLabel: string;
+  readError: string;
+}
+
 /**
- * Страница контракта Socket.IO. OpenAPI этот протокол не описывает,
- * поэтому документ читается из docs/websocket.md и отдаётся отдельно от Swagger.
+ * Контракты сокетов OpenAPI не описывает, поэтому страницы читаются из docs/
+ * и отдаются отдельно от Swagger.
  */
+const pages: DocPage[] = [
+  {
+    route: '/websocket-docs',
+    file: 'websocket.md',
+    title: 'WebSocket — VKS Service',
+    navLabel: 'WebSocket',
+    readError: 'Не удалось открыть документацию WebSocket',
+  },
+  {
+    route: '/hocuspocus-docs',
+    file: 'hocuspocus.md',
+    title: 'Hocuspocus — VKS Service',
+    navLabel: 'Документы',
+    readError: 'Не удалось открыть документацию документов',
+  },
+];
+
 export function registerWebsocketDocs(
   app: NestFastifyApplication,
   swaggerPath: string,
 ): void {
   const instance = app.getHttpAdapter().getInstance();
-  const handler = async (_request: unknown, reply: FastifyReply) => {
-    try {
-      const source = await readFile(DOC_PATH, 'utf8');
-      const body = markdown.parse(source, { async: false });
 
-      return reply
-        .header('Cache-Control', 'no-store')
-        .type('text/html; charset=utf-8')
-        .send(renderPage(body, swaggerPath));
-    } catch (error) {
-      logger.error('Не удалось прочитать docs/websocket.md', error);
+  for (const page of pages) {
+    const handler = async (_request: unknown, reply: FastifyReply) => {
+      try {
+        const source = await readFile(
+          path.join(process.cwd(), 'docs', page.file),
+          'utf8',
+        );
+        const body = markdown.parse(source, { async: false });
 
-      return reply
-        .code(500)
-        .type('text/plain; charset=utf-8')
-        .send('Не удалось открыть документацию WebSocket');
-    }
-  };
+        return reply
+          .header('Cache-Control', 'no-store')
+          .type('text/html; charset=utf-8')
+          .send(renderPage(body, page, swaggerPath));
+      } catch (error) {
+        logger.error(`Не удалось прочитать docs/${page.file}`, error);
 
-  instance.get('/websocket-docs', handler);
-  instance.get('/websocket-docs/', handler);
+        return reply
+          .code(500)
+          .type('text/plain; charset=utf-8')
+          .send(page.readError);
+      }
+    };
+
+    instance.get(page.route, handler);
+    instance.get(`${page.route}/`, handler);
+  }
 }
 
-function renderPage(body: string, swaggerPath: string): string {
+function renderPage(
+  body: string,
+  current: DocPage,
+  swaggerPath: string,
+): string {
   const restHref = escapeHtml(`/${encodeURI(swaggerPath)}`);
+  const links = pages
+    .map((page) => {
+      const currentAttr =
+        page.route === current.route ? ' aria-current="page"' : '';
+
+      return `<a href="${page.route}/"${currentAttr}>${escapeHtml(page.navLabel)}</a>`;
+    })
+    .join('\n      ');
 
   return `<!DOCTYPE html>
 <html lang="ru">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>WebSocket — VKS Service</title>
+  <title>${escapeHtml(current.title)}</title>
   <style>
     :root { color-scheme: light; }
     body { margin: 0; font: 16px/1.55 system-ui, sans-serif; color: #1c1917; background: #fafaf9; }
@@ -83,7 +125,7 @@ function renderPage(body: string, swaggerPath: string): string {
   <header>
     <strong>VKS Service</strong>
     <nav>
-      <a href="/websocket-docs/" aria-current="page">WebSocket</a>
+      ${links}
       <a href="${restHref}">REST</a>
     </nav>
   </header>
