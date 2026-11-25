@@ -68,6 +68,7 @@ model User {
   passwordResetTokens    PasswordResetToken[]
   rooms                  Room[]
   conferenceParticipants ConferenceParticipant[]
+  roomDocuments          RoomDocument[]
 }
 
 /// id сессии входит в refresh token, поэтому это UUID, а не последовательный Int.
@@ -118,8 +119,9 @@ model Room {
   expiresAt  DateTime?
   deletedAt  DateTime?
 
-  owner       User         @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  owner       User           @relation(fields: [ownerId], references: [id], onDelete: Restrict)
   conferences Conference[]
+  documents   RoomDocument[]
 
   @@index([ownerId])
 }
@@ -136,6 +138,7 @@ model Conference {
   room         Room                    @relation(fields: [roomId], references: [id], onDelete: Restrict)
   participants ConferenceParticipant[]
   messages     ConferenceMessage[]
+  documents    ConferenceDocument[]
 
   @@unique([roomId], map: "Conference_one_unfinished_per_room", where: raw("(status = ANY (ARRAY['ACTIVE'::\"ConferenceStatus\", 'EMPTY'::\"ConferenceStatus\"]))"))
   @@index([roomId, status])
@@ -195,4 +198,43 @@ model ConferenceMessage {
 
   @@index([conferenceId, createdAt])
   @@index([participantId])
+}
+
+/// Документ комнаты. Одно актуальное состояние Yjs, без копий и снимков по конференциям.
+model RoomDocument {
+  id          String    @id @default(uuid()) @db.Uuid
+  roomId      String    @db.Uuid
+  createdById Int?
+  title       String
+  yjsState    Bytes
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  room        Room                 @relation(fields: [roomId], references: [id], onDelete: Restrict)
+  createdBy   User?                @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  conferences ConferenceDocument[]
+
+  @@index([roomId, deletedAt])
+  @@index([roomId, updatedAt])
+  @@index([createdById])
+  @@map("room_documents")
+}
+
+/// Документ, с которым работали на конкретной конференции. Содержимое не копируется.
+model ConferenceDocument {
+  id            String    @id @default(uuid()) @db.Uuid
+  conferenceId  String    @db.Uuid
+  documentId    String    @db.Uuid
+  attachedAt    DateTime  @default(now())
+  firstEditedAt DateTime?
+  lastEditedAt  DateTime?
+
+  conference Conference   @relation(fields: [conferenceId], references: [id], onDelete: Restrict)
+  document   RoomDocument @relation(fields: [documentId], references: [id], onDelete: Restrict)
+
+  @@unique([conferenceId, documentId])
+  @@index([documentId])
+  @@index([conferenceId, firstEditedAt])
+  @@map("conference_documents")
 }

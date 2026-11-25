@@ -30,7 +30,7 @@ async function bootstrap(): Promise<void> {
   const swaggerConfig = new DocumentBuilder()
     .setTitle('VKS Service')
     .setDescription(
-      'События конференции — Socket.IO, namespace `/conferences`: [WebSocket](/websocket-docs/).',
+      'События конференции — Socket.IO, namespace `/conferences`: [WebSocket](/websocket-docs/). Совместное редактирование документов — WebSocket Hocuspocus, адрес возвращает POST /rooms/{roomId}/documents/{documentId}/access.',
     )
     .setVersion('1.0')
     .addBearerAuth()

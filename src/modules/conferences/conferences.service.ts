@@ -36,6 +36,7 @@ import {
 import { MutedMicrophoneDto } from './dto/mute-microphone.dto.js';
 import { ParticipantRemovedDto } from './dto/remove-participant.dto.js';
 import { MediaService } from '../media/media.service.js';
+import { CollaborationService } from '../documents/collaboration/collaboration.service.js';
 import {
   ConferenceDto,
   ConferenceListDto,
@@ -91,6 +92,8 @@ export class ConferencesService {
     private readonly events: ConferenceEventsService,
     @Inject(forwardRef(() => MediaService))
     private readonly media: MediaService,
+    @Inject(forwardRef(() => CollaborationService))
+    private readonly collaboration: CollaborationService,
   ) {}
 
   /**
@@ -355,11 +358,16 @@ export class ConferencesService {
 
     await this.presence.withRoomLock(roomId, async () => {
       const now = new Date();
-      const finished = await this.prisma.$transaction(async (tx) => {
-        const room = await lockRoom(tx, roomId);
+      const finished = await this.collaboration.withConferenceSeal(
+        conferenceId,
+        () =>
+          this.prisma.$transaction(async (tx) => {
+            const room = await lockRoom(tx, roomId);
 
-        return finishConference(tx, conferenceId, room!, now);
-      });
+            return finishConference(tx, conferenceId, room!, now);
+          }),
+        (ended) => ended,
+      );
 
       if (finished) {
         await this.events.conferenceEnded(conferenceId, now);
@@ -726,7 +734,7 @@ export class ConferencesService {
    * Организатор комнаты, HOST и MODERATOR. Роль берётся из участника конференции,
    * владелец комнаты считается организатором даже до входа.
    */
-  private assertModerator(access: ConferenceAccess): void {
+  assertModerator(access: ConferenceAccess): void {
     const role = access.participant?.role;
     const canModerate =
       access.isOrganizer ||

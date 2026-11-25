@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import {
   ConferenceStatus,
@@ -15,6 +15,7 @@ import {
 import { ConferenceEventsService } from './conference-events.service.js';
 import { ConferencePresenceService } from './conference-presence.service.js';
 import { ConferenceSessionsService } from './conference-sessions.service.js';
+import { CollaborationService } from '../documents/collaboration/collaboration.service.js';
 
 const BATCH_SIZE = 100;
 
@@ -28,6 +29,8 @@ export class ConferencesScheduler {
     private readonly conferenceSessionsService: ConferenceSessionsService,
     private readonly presence: ConferencePresenceService,
     private readonly events: ConferenceEventsService,
+    @Inject(forwardRef(() => CollaborationService))
+    private readonly collaboration: CollaborationService,
   ) {}
 
   @Cron(CronExpression.EVERY_30_SECONDS)
@@ -67,24 +70,41 @@ export class ConferencesScheduler {
         const done = await this.presence.withRoomLock(
           candidate.roomId,
           async () => {
-            const endedAt = new Date();
-            const finished = await this.prisma.$transaction(async (tx) => {
-              const room = await lockRoom(tx, candidate.roomId);
-              const conference = await tx.conference.findUnique({
-                where: { id: candidate.id },
-              });
-
-              if (
-                !room ||
-                conference?.status !== ConferenceStatus.EMPTY ||
-                !conference.emptyAt ||
-                conference.emptyAt > threshold
-              ) {
-                return false;
-              }
-
-              return finishConference(tx, conference.id, room, endedAt);
+            const preview = await this.prisma.conference.findUnique({
+              where: { id: candidate.id },
             });
+
+            if (
+              preview?.status !== ConferenceStatus.EMPTY ||
+              !preview.emptyAt ||
+              preview.emptyAt > threshold
+            ) {
+              return false;
+            }
+
+            const endedAt = new Date();
+            const finished = await this.collaboration.withConferenceSeal(
+              candidate.id,
+              () =>
+                this.prisma.$transaction(async (tx) => {
+                  const room = await lockRoom(tx, candidate.roomId);
+                  const conference = await tx.conference.findUnique({
+                    where: { id: candidate.id },
+                  });
+
+                  if (
+                    !room ||
+                    conference?.status !== ConferenceStatus.EMPTY ||
+                    !conference.emptyAt ||
+                    conference.emptyAt > threshold
+                  ) {
+                    return false;
+                  }
+
+                  return finishConference(tx, conference.id, room, endedAt);
+                }),
+              (ended) => ended,
+            );
 
             if (finished) {
               await this.events.conferenceEnded(candidate.id, endedAt);

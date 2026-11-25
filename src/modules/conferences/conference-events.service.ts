@@ -1,6 +1,7 @@
 import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
 import type { Namespace, Socket } from 'socket.io';
 import { MediaService } from '../media/media.service.js';
+import { CollaborationService } from '../documents/collaboration/collaboration.service.js';
 import {
   Conference,
   ConferenceStatus,
@@ -49,6 +50,8 @@ export class ConferenceEventsService {
     private readonly presence: ConferencePresenceService,
     @Inject(forwardRef(() => MediaService))
     private readonly media: MediaService,
+    @Inject(forwardRef(() => CollaborationService))
+    private readonly collaboration: CollaborationService,
   ) {}
 
   bindServer(server: Namespace): void {
@@ -118,6 +121,15 @@ export class ConferenceEventsService {
     sessionIds: string[],
     options: { emptied?: Conference | null; initiatorSocketId?: string } = {},
   ): Promise<void> {
+    await this.collaboration
+      .revokeParticipantsWithoutSessions(conferenceId, sessionIds)
+      .catch((error: unknown) => {
+        this.logger.error(
+          'Не удалось отозвать доступ к документам',
+          error instanceof Error ? error.stack : error,
+        );
+      });
+
     const room = conferenceRoom(conferenceId);
     const affected = new Set<string>();
 

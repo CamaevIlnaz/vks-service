@@ -19,6 +19,7 @@ import {
   UNFINISHED_CONFERENCE_STATUSES,
 } from '../conferences/conference-lifecycle.js';
 import { ConferencePresenceService } from '../conferences/conference-presence.service.js';
+import { CollaborationService } from '../documents/collaboration/collaboration.service.js';
 import { CreateQuickRoomDto } from './dto/create-quick-room.dto.js';
 import { CreateRoomDto } from './dto/create-room.dto.js';
 import { PublicRoomDto } from './dto/public-room.dto.js';
@@ -54,6 +55,7 @@ export class RoomsService {
     private readonly prisma: PrismaService,
     private readonly presence: ConferencePresenceService,
     private readonly events: ConferenceEventsService,
+    private readonly collaboration: CollaborationService,
   ) {}
 
   async create(ownerId: number, dto: CreateRoomDto): Promise<RoomDto> {
@@ -204,11 +206,24 @@ export class RoomsService {
   async remove(ownerId: number, id: string): Promise<void> {
     await this.presence.withRoomLock(id, async () => {
       const now = new Date();
-      const finishedConferenceId = await this.prisma.$transaction(
-        async (tx) => {
-          const room = await lockRoom(tx, id);
+      const room = await this.prisma.room.findUnique({ where: { id } });
 
-          if (!room || room.ownerId !== ownerId || room.deletedAt) {
+      if (!room || room.ownerId !== ownerId || room.deletedAt) {
+        throw new NotFoundException('Комната не найдена');
+      }
+
+      const unfinished = await this.prisma.conference.findFirst({
+        where: {
+          roomId: id,
+          status: { in: UNFINISHED_CONFERENCE_STATUSES },
+        },
+        select: { id: true },
+      });
+      const finishRoom = () =>
+        this.prisma.$transaction(async (tx) => {
+          const locked = await lockRoom(tx, id);
+
+          if (!locked || locked.ownerId !== ownerId || locked.deletedAt) {
             throw new NotFoundException('Комната не найдена');
           }
 
@@ -220,13 +235,19 @@ export class RoomsService {
           });
           const finished =
             conference !== null &&
-            (await finishConference(tx, conference.id, room, now));
+            (await finishConference(tx, conference.id, locked, now));
 
           await tx.room.update({ where: { id }, data: { deletedAt: now } });
 
           return finished ? conference.id : null;
-        },
-      );
+        });
+      const finishedConferenceId = unfinished
+        ? await this.collaboration.withConferenceSeal(
+            unfinished.id,
+            finishRoom,
+            (conferenceId) => conferenceId !== null,
+          )
+        : await finishRoom();
 
       if (finishedConferenceId) {
         await this.events.conferenceEnded(finishedConferenceId, now);

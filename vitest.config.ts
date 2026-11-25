@@ -14,6 +14,12 @@ export default defineConfig({
   test: {
     include: ['test/**/*.e2e-spec.ts'],
     setupFiles: ['dotenv/config'],
+    env: {
+      COLLABORATION_PORT: '41234',
+      COLLABORATION_URL: 'ws://127.0.0.1:41234',
+      COLLABORATION_DEBOUNCE_MS: '200',
+      COLLABORATION_MAX_DEBOUNCE_MS: '800',
+    },
     testTimeout: 30_000,
     hookTimeout: 30_000,
     fileParallelism: false,
