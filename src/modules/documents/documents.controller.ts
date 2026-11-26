@@ -125,23 +125,35 @@ export class DocumentsController {
     return this.documentsService.getOne(user.id, roomId, documentId);
   }
 
+  @OptionalAuth()
   @Patch(':documentId')
-  @ApiOperation({ summary: 'Переименовать документ' })
+  @UseGuards(ConferenceActorGuard)
+  @ApiSecurity('guest')
+  @ApiOperation({
+    summary: 'Переименовать документ',
+    description:
+      'Владелец комнаты может переименовать документ в любой момент. ' +
+      'Участник и гость — только пока у них есть открытое подключение к активной конференции этой комнаты.',
+  })
   @ApiParam({ name: 'roomId', format: 'uuid' })
   @ApiParam({ name: 'documentId', format: 'uuid' })
   @ApiOkResponse({ type: DocumentDto })
   @ApiBadRequestResponse({ description: 'Пустое или слишком длинное название' })
   @ApiNotFoundResponse({
-    description: `${ROOM_NOT_FOUND}, либо ${DOCUMENT_NOT_FOUND}`,
+    description: `${DOCUMENT_NOT_FOUND}. Чужая комната тоже отвечает 404`,
   })
-  @ApiUnauthorizedResponse({ description: UNAUTHORIZED })
+  @ApiForbiddenResponse({
+    description:
+      'Нет открытого подключения к активной конференции либо конференция уже завершена',
+  })
+  @ApiUnauthorizedResponse({ description: UNAUTHORIZED_ACTOR })
   rename(
-    @CurrentUser() user: AuthUser,
+    @CurrentActor() actor: ConferenceActor,
     @Param('roomId', new ParseUUIDPipe()) roomId: string,
     @Param('documentId', new ParseUUIDPipe()) documentId: string,
     @Body() dto: UpdateDocumentDto,
   ): Promise<DocumentDto> {
-    return this.documentsService.rename(user.id, roomId, documentId, dto);
+    return this.documentsService.rename(actor, roomId, documentId, dto);
   }
 
   @Delete(':documentId')

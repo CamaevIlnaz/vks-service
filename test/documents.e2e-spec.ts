@@ -357,6 +357,78 @@ describe('совместное редактирование', () => {
     return response;
   }
 
+  it('позволяет переименовать документ любому, кто сейчас на встрече', async () => {
+    const owner = await createUser('Владелец');
+    const colleague = await createUser('Участник');
+    const outsider = await createUser('Мимо');
+    const { room, document } = await openMeeting(owner);
+    const colleagueJoin = (
+      await join(room.slug, { headers: colleague.auth })
+    ).json();
+    const draft = (
+      await api('POST', `/rooms/${room.id}/documents`, {
+        headers: owner.auth,
+        payload: { title: 'Черновик' },
+      })
+    ).json();
+
+    const byColleague = await api(
+      'PATCH',
+      `/rooms/${room.id}/documents/${document.id}`,
+      { headers: colleague.auth, payload: { title: 'От участника' } },
+    );
+
+    expect(byColleague.statusCode).toBe(200);
+    expect(byColleague.json().title).toBe('От участника');
+
+    const unattached = await api(
+      'PATCH',
+      `/rooms/${room.id}/documents/${draft.id}`,
+      { headers: colleague.auth, payload: { title: 'Тоже от участника' } },
+    );
+
+    expect(unattached.statusCode).toBe(200);
+
+    const guestJoin = (
+      await join(room.slug, { payload: { guestName: 'Гость' } })
+    ).json();
+    const byGuest = await api(
+      'PATCH',
+      `/rooms/${room.id}/documents/${document.id}`,
+      {
+        headers: { [GUEST_TOKEN_HEADER]: guestJoin.guestToken as string },
+        payload: { title: 'От гостя' },
+      },
+    );
+
+    expect(byGuest.statusCode).toBe(200);
+    expect(byGuest.json().title).toBe('От гостя');
+
+    const hidden = await api(
+      'PATCH',
+      `/rooms/${room.id}/documents/${document.id}`,
+      { headers: outsider.auth, payload: { title: 'Чужое' } },
+    );
+
+    expect(hidden.statusCode).toBe(404);
+
+    const leave = await api(
+      'POST',
+      `/conferences/sessions/${colleagueJoin.sessionId}/leave`,
+      { headers: colleague.auth },
+    );
+
+    expect(leave.statusCode).toBe(200);
+
+    const afterLeave = await api(
+      'PATCH',
+      `/rooms/${room.id}/documents/${document.id}`,
+      { headers: colleague.auth, payload: { title: 'После выхода' } },
+    );
+
+    expect(afterLeave.statusCode).toBe(403);
+  });
+
   it('синхронизирует одновременные правки, восстанавливает их после переподключения и не считает курсор правкой', async () => {
     const owner = await createUser('Редактор');
     const colleague = await createUser('Коллега');
