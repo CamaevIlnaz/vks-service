@@ -69,8 +69,10 @@ model User {
   rooms                  Room[]
   conferenceParticipants ConferenceParticipant[]
   roomDocuments          RoomDocument[]
-  roomMemberships        RoomMember[]         @relation("RoomMembership")
-  roomMembersAdded       RoomMember[]         @relation("RoomMemberAddedBy")
+  roomMemberships        RoomMember[]            @relation("RoomMembership")
+  roomMembersAdded       RoomMember[]            @relation("RoomMemberAddedBy")
+  organizedMeetings      Meeting[]               @relation("MeetingOrganizer")
+  meetingAttendances     MeetingAttendee[]
 }
 
 /// id сессии входит в refresh token, поэтому это UUID, а не последовательный Int.
@@ -125,6 +127,7 @@ model Room {
   conferences Conference[]
   documents   RoomDocument[]
   members     RoomMember[]
+  meetings    Meeting[]
 
   @@index([ownerId])
 }
@@ -259,4 +262,43 @@ model ConferenceDocument {
   @@index([documentId])
   @@index([conferenceId, firstEditedAt])
   @@map("conference_documents")
+}
+
+/// Запланированная встреча в комнате.
+/// Не связана с конференцией: приглашение не даёт права подключиться к комнате.
+model Meeting {
+  id          String   @id @default(uuid()) @db.Uuid
+  roomId      String   @db.Uuid
+  organizerId Int
+  title       String
+  description String?
+  startsAt    DateTime
+  endsAt      DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  room      Room              @relation(fields: [roomId], references: [id], onDelete: Restrict)
+  organizer User              @relation("MeetingOrganizer", fields: [organizerId], references: [id], onDelete: Restrict)
+  attendees MeetingAttendee[]
+
+  @@index([roomId])
+  @@index([organizerId])
+  @@index([startsAt])
+  @@index([endsAt])
+  @@map("meetings")
+}
+
+/// Приглашённый на встречу. Организатор хранится в Meeting.organizerId и сюда не записывается.
+model MeetingAttendee {
+  id        String   @id @default(uuid()) @db.Uuid
+  meetingId String   @db.Uuid
+  userId    Int
+  createdAt DateTime @default(now())
+
+  meeting Meeting @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([meetingId, userId])
+  @@index([userId])
+  @@map("meeting_attendees")
 }

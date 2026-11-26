@@ -64,4 +64,16 @@ export class RoomAccessService {
 
     return new Set([room.ownerId, ...members.map((member) => member.userId)]);
   }
+
+  /**
+   * Управление расписанием комнаты: создавать встречи и менять комнату
+   * или состав приглашённых. Право есть у владельца.
+   * Участие в комнате и приглашение на встречу его не дают.
+   */
+  canManageSchedule(
+    room: Pick<RoomJoinTarget, 'ownerId'>,
+    userId: number,
+  ): boolean {
+    return room.ownerId === userId;
+  }
 }

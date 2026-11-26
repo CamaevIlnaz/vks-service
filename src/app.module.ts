@@ -9,6 +9,7 @@ import { AuthModule } from './modules/auth/auth.module.js';
 import { ConferencesModule } from './modules/conferences/conferences.module.js';
 import { DocumentsModule } from './modules/documents/documents.module.js';
 import { MediaModule } from './modules/media/media.module.js';
+import { MeetingsModule } from './modules/meetings/meetings.module.js';
 import { RoomsModule } from './modules/rooms/rooms.module.js';
 import { UsersModule } from './modules/users/users.module.js';
 import { PrismaModule } from './prisma/prisma.module.js';
@@ -24,6 +25,7 @@ import { PrismaModule } from './prisma/prisma.module.js';
     UsersModule,
     AuthModule,
     RoomsModule,
+    MeetingsModule,
     ConferencesModule,
     DocumentsModule,
     MediaModule,
