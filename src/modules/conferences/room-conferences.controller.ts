@@ -34,6 +34,7 @@ import { ConferencesService } from './conferences.service.js';
 import { ConferenceListDto } from './dto/conference.dto.js';
 import { JoinResponseDto } from './dto/join-response.dto.js';
 import { JoinRoomDto } from './dto/join-room.dto.js';
+import { CLOSED_ROOM_FORBIDDEN } from '../rooms/room-access.js';
 import { GUEST_TOKEN_HEADER } from './guest-tokens.service.js';
 
 @ApiTags('conferences')
@@ -61,7 +62,7 @@ export class RoomConferencesController {
     description: 'Гость не указал имя или поля некорректны',
   })
   @ApiForbiddenResponse({
-    description: 'Комната закрыта: подключиться может только организатор',
+    description: CLOSED_ROOM_FORBIDDEN,
   })
   @ApiNotFoundResponse({ description: 'Комната не найдена или удалена' })
   @ApiGoneResponse({

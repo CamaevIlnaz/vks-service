@@ -1,4 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
+import { PaginatedDto } from '../../../common/dto/paginated.dto.js';
 import {
   User,
   UserRole,
@@ -46,4 +47,9 @@ export class UserDto {
       createdAt: user.createdAt,
     };
   }
+}
+
+export class UserListDto extends PaginatedDto {
+  @ApiProperty({ type: [UserDto] })
+  items: UserDto[];
 }

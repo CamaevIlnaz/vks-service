@@ -20,7 +20,7 @@ import { PaginationQueryDto } from '../../common/dto/pagination-query.dto.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import type { AuthUser } from '../auth/auth.types.js';
 import { PublicRoomDto } from '../rooms/dto/public-room.dto.js';
-import { getJoinError } from '../rooms/room-access.js';
+import { RoomAccessService } from '../rooms/room-access.service.js';
 import {
   closeSessions,
   finishConference,
@@ -69,6 +69,15 @@ export interface ConferenceAccess {
   isOrganizer: boolean;
 }
 
+/** Сессии, закрытые из-за потери доступа к комнате. История участника не удаляется. */
+export interface RevokedRoomAccess {
+  conferenceId: string;
+  sessionIds: string[];
+  participantIds: string[];
+  conference: Conference;
+  emptied: boolean;
+}
+
 export function detectDeviceType(userAgent: string | undefined): DeviceType {
   if (!userAgent) {
     return DeviceType.UNKNOWN;
@@ -94,6 +103,7 @@ export class ConferencesService {
     private readonly media: MediaService,
     @Inject(forwardRef(() => CollaborationService))
     private readonly collaboration: CollaborationService,
+    private readonly roomAccess: RoomAccessService,
   ) {}
 
   /**
@@ -190,11 +200,12 @@ export class ConferencesService {
               status: { in: UNFINISHED_CONFERENCE_STATUSES },
             },
           });
-          const joinError = getJoinError(
+          const joinError = await this.roomAccess.getJoinError(
             room,
             identity.kind === 'user' ? identity.userId : null,
             conference !== null,
             now,
+            tx,
           );
 
           if (joinError) {
@@ -525,6 +536,52 @@ export class ConferencesService {
     }
 
     return { conference, participant, isOrganizer };
+  }
+
+  /**
+   * Повторный вход того же сокета. Комнату могли закрыть или убрать пользователя,
+   * пока сокет оставался подключённым.
+   */
+  async assertCanStay(roomId: string, userId: number | null): Promise<void> {
+    const room = await this.prisma.room.findUnique({ where: { id: roomId } });
+
+    if (!room) {
+      throw new NotFoundException('Комната не найдена');
+    }
+
+    const unfinished = await this.prisma.conference.count({
+      where: { roomId, status: { in: UNFINISHED_CONFERENCE_STATUSES } },
+    });
+    const error = await this.roomAccess.getJoinError(
+      room,
+      userId,
+      unfinished > 0,
+    );
+
+    if (error) {
+      throw error;
+    }
+  }
+
+  /**
+   * Сокеты, LiveKit и Hocuspocus для сессий, уже закрытых в БД.
+   * Вызывать под `withRoomLock`, после фиксации транзакции. Повтор с пустым списком ничего не делает.
+   */
+  async notifyAccessRevoked(revoked: RevokedRoomAccess | null): Promise<void> {
+    if (!revoked || revoked.sessionIds.length === 0) {
+      return;
+    }
+
+    await this.events.sessionsClosed(revoked.conferenceId, revoked.sessionIds, {
+      emptied: revoked.emptied ? revoked.conference : null,
+    });
+
+    for (const participantId of revoked.participantIds) {
+      await this.media.disconnectParticipant(
+        revoked.conferenceId,
+        participantId,
+      );
+    }
   }
 
   /**

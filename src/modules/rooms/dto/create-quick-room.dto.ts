@@ -7,6 +7,8 @@ export class CreateQuickRoomDto {
     enum: RoomAccessType,
     enumName: 'RoomAccessType',
     default: RoomAccessType.OPEN,
+    description:
+      'OPEN — вход по ссылке для всех, включая гостей. CLOSED — только владелец и пользователи из списка допуска',
   })
   @IsOptional()
   @IsEnum(RoomAccessType)

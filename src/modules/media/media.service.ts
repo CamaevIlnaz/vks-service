@@ -18,7 +18,7 @@ import {
   type ConferenceActor,
 } from '../conferences/conference.types.js';
 import { participantDisplayName } from '../conferences/dto/participant.dto.js';
-import { getJoinError } from '../rooms/room-access.js';
+import { RoomAccessService } from '../rooms/room-access.service.js';
 import { MediaRoomDto } from './dto/media-room.dto.js';
 import { MediaTokenDto } from './dto/media-token.dto.js';
 import {
@@ -54,6 +54,7 @@ export class MediaService {
     private readonly presence: ConferencePresenceService,
     private readonly mediaPresence: MediaPresenceService,
     private readonly livekit: LivekitService,
+    private readonly roomAccess: RoomAccessService,
   ) {}
 
   async createToken(
@@ -120,7 +121,13 @@ export class MediaService {
         }
       }
 
-      const joinError = getJoinError(conference.room, participant.userId, true);
+      // Новый токен не выдаётся без допуска. Уже выданный JWT короче пяти минут
+      // и при повторном входе отклоняется в webhook participant_joined.
+      const joinError = await this.roomAccess.getJoinError(
+        conference.room,
+        participant.userId,
+        true,
+      );
 
       if (joinError) {
         throw joinError;
@@ -485,8 +492,9 @@ export class MediaService {
         participant: {
           select: {
             id: true,
+            userId: true,
             conferenceId: true,
-            conference: { select: { status: true } },
+            conference: { select: { status: true, room: true } },
           },
         },
       },
@@ -499,6 +507,16 @@ export class MediaService {
       session.participant.conference.status !== ConferenceStatus.ACTIVE ||
       !this.presence.isSessionConnected(identity)
     ) {
+      return null;
+    }
+
+    const joinError = await this.roomAccess.getJoinError(
+      session.participant.conference.room,
+      session.participant.userId,
+      true,
+    );
+
+    if (joinError) {
       return null;
     }
 

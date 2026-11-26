@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Patch, Req } from '@nestjs/common';
+import { Body, Controller, Get, Patch, Query, Req } from '@nestjs/common';
 import {
   ApiBadRequestResponse,
   ApiBearerAuth,
@@ -15,7 +15,8 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import type { AuthUser } from '../auth/auth.types.js';
 import { readAvatar } from './avatar-file.js';
 import { UpdateUserDto } from './dto/update-user.dto.js';
-import { UserDto } from './dto/user.dto.js';
+import { UserSearchQueryDto } from './dto/user-search-query.dto.js';
+import { UserDto, UserListDto } from './dto/user.dto.js';
 import { UsersService } from './users.service.js';
 
 @ApiTags('users')
@@ -23,6 +24,23 @@ import { UsersService } from './users.service.js';
 @Controller('users')
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
+
+  @Get()
+  @ApiOperation({
+    summary: 'Найти зарегистрированных пользователей',
+    description:
+      'Поиск по имени и email среди активных учётных записей. Нужен, чтобы владелец комнаты выбрал, кого добавить.',
+  })
+  @ApiOkResponse({ type: UserListDto })
+  @ApiBadRequestResponse({
+    description: 'Пустая строка поиска или некорректная пагинация',
+  })
+  @ApiUnauthorizedResponse({
+    description: 'Нет или недействителен access token',
+  })
+  search(@Query() query: UserSearchQueryDto): Promise<UserListDto> {
+    return this.usersService.search(query);
+  }
 
   @Get('me')
   @ApiOperation({ summary: 'Профиль текущего пользователя' })

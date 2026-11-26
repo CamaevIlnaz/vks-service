@@ -6,6 +6,7 @@ import {
 import { ConferenceStatus, Prisma } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import type { ConferenceActor } from '../conferences/conference.types.js';
+import { RoomAccessService } from '../rooms/room-access.service.js';
 import { DocumentListQueryDto } from './dto/document-list-query.dto.js';
 import { DocumentDto, DocumentListDto } from './dto/document.dto.js';
 import { CreateDocumentDto } from './dto/create-document.dto.js';
@@ -18,6 +19,7 @@ export class DocumentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly collaboration: CollaborationService,
+    private readonly roomAccess: RoomAccessService,
   ) {}
 
   async list(
@@ -148,7 +150,19 @@ export class DocumentsService {
         deletedAt: null,
         room: { deletedAt: null },
       },
-      select: { room: { select: { ownerId: true } } },
+      select: {
+        room: {
+          select: {
+            id: true,
+            ownerId: true,
+            accessType: true,
+            deletedAt: true,
+            status: true,
+            type: true,
+            expiresAt: true,
+          },
+        },
+      },
     });
 
     if (!document) {
@@ -186,6 +200,16 @@ export class DocumentsService {
 
     if (openSessions === 0) {
       throw new ForbiddenException('Нет активного подключения к конференции');
+    }
+
+    const joinError = await this.roomAccess.getJoinError(
+      document.room,
+      actor.kind === 'user' ? actor.userId : null,
+      true,
+    );
+
+    if (joinError) {
+      throw joinError;
     }
   }
 

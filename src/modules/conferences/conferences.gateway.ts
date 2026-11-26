@@ -148,6 +148,24 @@ export class ConferencesGateway
       current?.roomId === roomId &&
       socket.data.joined?.sessionId === current.sessionId
     ) {
+      try {
+        await this.conferencesService.assertCanStay(
+          roomId,
+          identity.kind === 'user' ? identity.userId : null,
+        );
+      } catch (error) {
+        try {
+          await this.leaveCurrent(socket, false);
+        } catch (leaveError) {
+          this.logger.error(
+            'Не удалось закрыть подключение без доступа к комнате',
+            leaveError,
+          );
+        }
+
+        throw error;
+      }
+
       const state = await this.events.buildState(current.conferenceId);
 
       socket.emit(CONFERENCE_EVENTS.state, state);

@@ -3,13 +3,41 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { User } from '../../generated/prisma/client.js';
+import { Prisma, User, UserStatus } from '../../generated/prisma/client.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { deleteStoredAvatar, storeAvatar } from './avatar-file.js';
+import { UserSearchQueryDto } from './dto/user-search-query.dto.js';
+import { UserDto, UserListDto } from './dto/user.dto.js';
 
 @Injectable()
 export class UsersService {
   constructor(private readonly prisma: PrismaService) {}
+
+  async search(query: UserSearchQueryDto): Promise<UserListDto> {
+    const where: Prisma.UserWhereInput = {
+      status: UserStatus.ACTIVE,
+      OR: [
+        { name: { contains: query.search, mode: 'insensitive' } },
+        { email: { contains: query.search, mode: 'insensitive' } },
+      ],
+    };
+    const [total, users] = await this.prisma.$transaction([
+      this.prisma.user.count({ where }),
+      this.prisma.user.findMany({
+        where,
+        orderBy: [{ name: 'asc' }, { id: 'asc' }],
+        skip: query.skip,
+        take: query.limit,
+      }),
+    ]);
+
+    return {
+      items: users.map((user) => UserDto.fromEntity(user)),
+      total,
+      page: query.page,
+      limit: query.limit,
+    };
+  }
 
   findByEmail(email: string): Promise<User | null> {
     return this.prisma.user.findUnique({ where: { email } });

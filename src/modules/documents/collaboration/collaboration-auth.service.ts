@@ -11,6 +11,7 @@ import { isUUID } from 'class-validator';
 import { ConferenceStatus } from '../../../generated/prisma/client.js';
 import { PrismaService } from '../../../prisma/prisma.service.js';
 import type { ConferenceActor } from '../../conferences/conference.types.js';
+import { RoomAccessService } from '../../rooms/room-access.service.js';
 import { DocumentAccessDto } from '../dto/document-access.dto.js';
 import { documentName, parseDocumentName } from './document-name.js';
 
@@ -120,6 +121,7 @@ export class CollaborationAuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwtService: JwtService,
+    private readonly roomAccess: RoomAccessService,
     configService: ConfigService,
   ) {
     this.url = configService.getOrThrow<string>('collaboration.url');
@@ -250,7 +252,17 @@ export class CollaborationAuthService {
       select: {
         id: true,
         roomId: true,
-        room: { select: { ownerId: true, deletedAt: true } },
+        room: {
+          select: {
+            id: true,
+            ownerId: true,
+            accessType: true,
+            deletedAt: true,
+            status: true,
+            type: true,
+            expiresAt: true,
+          },
+        },
       },
     });
 
@@ -313,6 +325,16 @@ export class CollaborationAuthService {
 
     if (openSessions === 0) {
       throw new ForbiddenException('Нет активного подключения к конференции');
+    }
+
+    const joinError = await this.roomAccess.getJoinError(
+      document.room,
+      input.actor.kind === 'user' ? input.actor.userId : null,
+      true,
+    );
+
+    if (joinError) {
+      throw joinError;
     }
 
     const attached = await this.prisma.conferenceDocument.findUnique({

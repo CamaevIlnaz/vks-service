@@ -23,7 +23,7 @@ export class RoomConferenceDto {
   emptyAt: Date | null;
 }
 
-/** Комната глазами владельца. */
+/** Комната, которой пользователь владеет или в которую его добавили. */
 export class RoomDto {
   @ApiProperty({ format: 'uuid' })
   id: string;

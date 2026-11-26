@@ -69,6 +69,8 @@ model User {
   rooms                  Room[]
   conferenceParticipants ConferenceParticipant[]
   roomDocuments          RoomDocument[]
+  roomMemberships        RoomMember[]         @relation("RoomMembership")
+  roomMembersAdded       RoomMember[]         @relation("RoomMemberAddedBy")
 }
 
 /// id сессии входит в refresh token, поэтому это UUID, а не последовательный Int.
@@ -122,8 +124,28 @@ model Room {
   owner       User           @relation(fields: [ownerId], references: [id], onDelete: Restrict)
   conferences Conference[]
   documents   RoomDocument[]
+  members     RoomMember[]
 
   @@index([ownerId])
+}
+
+/// Допуск зарегистрированного пользователя в закрытую комнату.
+/// Владелец хранится в Room.ownerId и в эту таблицу не записывается.
+model RoomMember {
+  id        String   @id @default(uuid()) @db.Uuid
+  roomId    String   @db.Uuid
+  userId    Int
+  addedById Int
+  createdAt DateTime @default(now())
+
+  room    Room @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  user    User @relation("RoomMembership", fields: [userId], references: [id], onDelete: Cascade)
+  addedBy User @relation("RoomMemberAddedBy", fields: [addedById], references: [id], onDelete: Restrict)
+
+  @@unique([roomId, userId])
+  @@index([userId])
+  @@index([addedById])
+  @@map("room_members")
 }
 
 /// В одной комнате может быть только одна незавершённая конференция (ACTIVE или EMPTY).

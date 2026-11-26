@@ -5,6 +5,7 @@ import { PrismaModule } from '../../prisma/prisma.module.js';
 import { AuthModule } from '../auth/auth.module.js';
 import { DocumentsModule } from '../documents/documents.module.js';
 import { MediaModule } from '../media/media.module.js';
+import { RoomAccessModule } from '../rooms/room-access.module.js';
 import { ConferenceEventsService } from './conference-events.service.js';
 import { ConferencePresenceService } from './conference-presence.service.js';
 import { ConferenceSessionsService } from './conference-sessions.service.js';
@@ -25,6 +26,7 @@ import { RoomConferencesController } from './room-conferences.controller.js';
 @Module({
   imports: [
     PrismaModule,
+    RoomAccessModule,
     forwardRef(() => DocumentsModule),
     forwardRef(() => MediaModule),
     // AuthModule закрывает подключения через ConferenceSessionsService, а гейтвей проверяет токены через SessionsService.

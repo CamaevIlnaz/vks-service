@@ -37,7 +37,12 @@ export class UpdateRoomDto {
   })
   slug?: string;
 
-  @ApiPropertyOptional({ enum: RoomAccessType, enumName: 'RoomAccessType' })
+  @ApiPropertyOptional({
+    enum: RoomAccessType,
+    enumName: 'RoomAccessType',
+    description:
+      'CLOSED ограничивает вход владельцем и списком допуска. Смена OPEN → CLOSED отключает остальных',
+  })
   @IsOptional()
   @IsEnum(RoomAccessType)
   accessType?: RoomAccessType;

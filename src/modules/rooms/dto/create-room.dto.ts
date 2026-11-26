@@ -48,7 +48,7 @@ export class CreateRoomDto {
     enumName: 'RoomAccessType',
     default: RoomAccessType.OPEN,
     description:
-      'OPEN — вход по ссылке для всех, CLOSED — подключиться может только организатор',
+      'OPEN — вход по ссылке для всех, включая гостей. CLOSED — только владелец и пользователи из списка допуска',
   })
   @IsOptional()
   @IsEnum(RoomAccessType)

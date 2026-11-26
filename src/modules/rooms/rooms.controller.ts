@@ -6,6 +6,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  ParseIntPipe,
   ParseUUIDPipe,
   Patch,
   Post,
@@ -31,10 +32,12 @@ import { PaginationQueryDto } from '../../common/dto/pagination-query.dto.js';
 import type { AuthUser } from '../auth/auth.types.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import { OptionalAuth } from '../auth/decorators/optional-auth.decorator.js';
+import { AddRoomMemberDto } from './dto/add-room-member.dto.js';
 import { CreateQuickRoomDto } from './dto/create-quick-room.dto.js';
 import { CreateRoomDto } from './dto/create-room.dto.js';
 import { PublicRoomDto } from './dto/public-room.dto.js';
 import { RoomDto, RoomListDto } from './dto/room.dto.js';
+import { RoomMemberDto, RoomMemberListDto } from './dto/room-member.dto.js';
 import { UpdateRoomDto } from './dto/update-room.dto.js';
 import { RoomsService } from './rooms.service.js';
 
@@ -76,7 +79,11 @@ export class RoomsController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'Комнаты текущего пользователя' })
+  @ApiOperation({
+    summary: 'Комнаты текущего пользователя',
+    description:
+      'Свои комнаты и комнаты, в которые пользователя добавили. Удалённые комнаты скрыты.',
+  })
   @ApiOkResponse({ type: RoomListDto })
   @ApiBadRequestResponse({ description: 'Некорректные параметры пагинации' })
   @ApiUnauthorizedResponse({ description: UNAUTHORIZED })
@@ -126,9 +133,85 @@ export class RoomsController {
     return this.roomsService.getOwned(user.id, id);
   }
 
+  @Get(':id/members')
+  @ApiOperation({
+    summary: 'Пользователи, допущенные в комнату',
+    description:
+      'Только для владельца. Владелец в список не входит: его доступ задан полем ownerId. Для открытой комнаты список не ограничивает вход по ссылке.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid', description: 'id комнаты' })
+  @ApiOkResponse({ type: RoomMemberListDto })
+  @ApiBadRequestResponse({ description: 'Некорректные параметры пагинации' })
+  @ApiNotFoundResponse({
+    description:
+      'Комната не найдена, удалена или принадлежит другому пользователю',
+  })
+  @ApiUnauthorizedResponse({ description: UNAUTHORIZED })
+  listMembers(
+    @CurrentUser() user: AuthUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Query() query: PaginationQueryDto,
+  ): Promise<RoomMemberListDto> {
+    return this.roomsService.listMembers(user.id, id, query);
+  }
+
+  @Post(':id/members')
+  @ApiOperation({
+    summary: 'Добавить пользователя в комнату',
+    description:
+      'Только владелец. Допуск выдаётся сразу, без подтверждения. Повторное добавление отвечает 409. В закрытой комнате добавленный пользователь может подключаться сразу.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid', description: 'id комнаты' })
+  @ApiCreatedResponse({ type: RoomMemberDto })
+  @ApiBadRequestResponse({
+    description:
+      'Некорректный userId, пользователь заблокирован или это владелец комнаты',
+  })
+  @ApiNotFoundResponse({
+    description:
+      'Комната не найдена, удалена, принадлежит другому пользователю, либо пользователь не зарегистрирован',
+  })
+  @ApiConflictResponse({
+    description: 'Пользователь уже добавлен или комната завершена',
+  })
+  @ApiUnauthorizedResponse({ description: UNAUTHORIZED })
+  addMember(
+    @CurrentUser() user: AuthUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: AddRoomMemberDto,
+  ): Promise<RoomMemberDto> {
+    return this.roomsService.addMember(user.id, id, dto);
+  }
+
+  @Delete(':id/members/:userId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Удалить пользователя из комнаты',
+    description:
+      'Только владелец. В закрытой комнате активные сессии пользователя закрываются: сокеты, LiveKit и редактирование документов отключаются. История участия и сообщения сохраняются.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid', description: 'id комнаты' })
+  @ApiParam({ name: 'userId', description: 'id пользователя', example: 2 })
+  @ApiNoContentResponse({ description: 'Пользователь удалён из комнаты' })
+  @ApiNotFoundResponse({
+    description:
+      'Комната не найдена, принадлежит другому пользователю, либо пользователя нет в списке',
+  })
+  @ApiConflictResponse({ description: 'Комната завершена' })
+  @ApiUnauthorizedResponse({ description: UNAUTHORIZED })
+  removeMember(
+    @CurrentUser() user: AuthUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('userId', ParseIntPipe) userId: number,
+  ): Promise<void> {
+    return this.roomsService.removeMember(user.id, id, userId);
+  }
+
   @Patch(':id')
   @ApiOperation({
     summary: 'Изменить название, ссылку или тип доступа комнаты',
+    description:
+      'При смене доступа с OPEN на CLOSED отключаются гости и пользователи, которых нет в списке допуска. Владелец и добавленные участники остаются.',
   })
   @ApiParam({ name: 'id', format: 'uuid', description: 'id комнаты' })
   @ApiOkResponse({ type: RoomDto })
